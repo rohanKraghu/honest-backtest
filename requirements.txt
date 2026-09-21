@@ -1,0 +1,18 @@
+# Pinned so a reviewer reproduces the headline table exactly.
+# Verified on CPython 3.11.15.
+#
+# numpy is used for the synthetic price generator and the performance
+# statistics. The event loop itself is pure standard library, and there is
+# deliberately no pandas dependency: a DataFrame in the hot path is how
+# vectorised backtests get written, and this project is an argument against
+# writing them that way.
+numpy==2.2.6
+
+# Test-time only, but pinned here too so `pip install -r requirements.txt`
+# followed by `pytest` works from a clean clone with no second step.
+pytest==8.3.5
+
+# Transitive, pinned for a fully reproducible environment.
+iniconfig==2.3.0
+packaging==26.3
+pluggy==1.6.0
