@@ -16,6 +16,7 @@ from .commission import (
     PerShareCommission,
     ZeroCommission,
 )
+from .csvdata import CSVFormatError, load_csv_bars
 from .data import (
     Bar,
     DataHandler,
@@ -55,6 +56,7 @@ __all__ = [
     "BacktestResult",
     "Bar",
     "BuyAndHoldStrategy",
+    "CSVFormatError",
     "CommissionModel",
     "DataHandler",
     "EventType",
@@ -86,6 +88,7 @@ __all__ = [
     "bars_from_series",
     "compute_metrics",
     "generate_price_series",
+    "load_csv_bars",
     "run_backtest",
     "__version__",
 ]
