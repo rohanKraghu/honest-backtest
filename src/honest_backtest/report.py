@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from .experiments import SeedSweep, StudyResult
+from .experiments import LadderResult, SeedSweep, StudyResult
+from .spec import Params, format_params
 
 _HEADERS = (
     "#",
@@ -12,12 +13,13 @@ _HEADERS = (
     "Ann. return",
     "Max DD",
     "Trades",
-    "Lookback",
+    "Params",
 )
 
 
-def _fmt_lookback(values: list[int]) -> str:
-    """Render the chosen lookback(s) compactly."""
+def _fmt_params(chosen: list[Params]) -> str:
+    """Render the chosen parameter setting(s) compactly."""
+    values = [format_params(p) for p in chosen]
     if len(values) == 1:
         return str(values[0])
     unique = sorted(set(values))
@@ -26,7 +28,7 @@ def _fmt_lookback(values: list[int]) -> str:
     return "/".join(str(v) for v in values)
 
 
-def _rows(result: StudyResult) -> list[tuple[str, ...]]:
+def _rows(result: LadderResult) -> list[tuple[str, ...]]:
     """Build the table body."""
     rows: list[tuple[str, ...]] = []
     for stage in result.stages:
@@ -40,20 +42,21 @@ def _rows(result: StudyResult) -> list[tuple[str, ...]]:
                 f"{m.annual_return * 100:+.1f}%",
                 f"{m.max_drawdown * 100:.1f}%",
                 f"{m.n_trades}",
-                _fmt_lookback(stage.chosen_lookback),
+                _fmt_params(stage.chosen_params),
             )
         )
     return rows
 
 
-def render_table(result: StudyResult) -> str:
+def render_table(result: LadderResult, param_header: str = "Lookback") -> str:
     """Render the degradation table as aligned plain text."""
     rows = _rows(result)
+    headers = (*_HEADERS[:-1], param_header)
     widths = [
-        max(len(_HEADERS[i]), max(len(r[i]) for r in rows)) for i in range(len(_HEADERS))
+        max(len(headers[i]), max(len(r[i]) for r in rows)) for i in range(len(headers))
     ]
-    line = "  ".join(h.ljust(widths[i]) for i, h in enumerate(_HEADERS)).rstrip()
-    sep = "  ".join("-" * widths[i] for i in range(len(_HEADERS)))
+    line = "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)).rstrip()
+    sep = "  ".join("-" * widths[i] for i in range(len(headers)))
     body = [
         "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip()
         for row in rows
@@ -61,16 +64,17 @@ def render_table(result: StudyResult) -> str:
     return "\n".join([line, sep, *body])
 
 
-def render_markdown_table(result: StudyResult) -> str:
+def render_markdown_table(result: LadderResult, param_header: str = "Lookback") -> str:
     """Render the degradation table as Markdown, for pasting into the README."""
     rows = _rows(result)
-    head = "| " + " | ".join(_HEADERS) + " |"
-    sep = "| " + " | ".join("---" for _ in _HEADERS) + " |"
+    headers = (*_HEADERS[:-1], param_header)
+    head = "| " + " | ".join(headers) + " |"
+    sep = "| " + " | ".join("---" for _ in headers) + " |"
     body = ["| " + " | ".join(row) + " |" for row in rows]
     return "\n".join([head, sep, *body])
 
 
-def render_costs(result: StudyResult) -> str:
+def render_costs(result: LadderResult) -> str:
     """Render where the money went, stage by stage."""
     lines = ["Cost attribution (account currency, over the scored window):"]
     for stage in result.stages:

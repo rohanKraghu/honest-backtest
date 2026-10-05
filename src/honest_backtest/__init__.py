@@ -42,6 +42,7 @@ from .slippage import (
     SpreadPlusImpactSlippage,
     ZeroSlippage,
 )
+from .spec import StrategySpec, param_grid
 from .strategy import (
     BuyAndHoldStrategy,
     LookAheadMomentumStrategy,
@@ -79,6 +80,7 @@ __all__ = [
     "SlippageModel",
     "SpreadPlusImpactSlippage",
     "Strategy",
+    "StrategySpec",
     "SyntheticConfig",
     "SyntheticSeries",
     "TimeSeriesMomentumStrategy",
@@ -89,6 +91,7 @@ __all__ = [
     "compute_metrics",
     "generate_price_series",
     "load_csv_bars",
+    "param_grid",
     "run_backtest",
     "__version__",
 ]
