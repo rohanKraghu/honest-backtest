@@ -220,8 +220,9 @@ src/honest_backtest/
 
 ## The data
 
-The sandbox this was built in has no market data access, so prices are
-**synthetic**, generated with a fixed seed:
+The demo runs on **synthetic** prices, generated with a fixed seed, because a
+labelled ground truth (the true size of the edge) is only available when the
+signal is injected:
 
 ```
 s_t = φ·s_{t-1} + √(1-φ²)·η_t                  latent AR(1) state, unit variance
@@ -235,9 +236,8 @@ never see it and must infer it from past returns, where it sits under noise
 roughly `1/α` times larger.
 
 **This is a demonstration harness, not a performance claim.** No conclusion about
-any real market follows from it. Synthetic data was chosen for a reason beyond
-sandbox constraints: it makes the ground truth knowable. Because the size of the
-injected edge is known, the Sharpe a backtest *reports* can be compared against
+any real market follows from it. Synthetic data was chosen because it makes the
+ground truth knowable. Because the size of the injected edge is known, the Sharpe a backtest *reports* can be compared against
 the Sharpe that is actually *there* — stage 1's 6.94 against a ceiling of 1.30.
 With real data you can never separate "my method is biased" from "the market
 really did that".
