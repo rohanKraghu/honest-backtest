@@ -39,7 +39,8 @@ def test_param_grid_is_the_ordered_cartesian_product():
 
 def test_format_params_is_bare_for_one_key():
     assert format_params({"lookback": 20}) == "20"
-    assert format_params({"fast": 5, "slow": 50}) == "fast=5,slow=50"
+    assert format_params({"fast": 5, "slow": 50}) == "5,50"
+    assert format_params({}) == "-"
 
 
 def test_an_empty_grid_is_rejected():

@@ -86,7 +86,16 @@ class StrategySpec:
 
 
 def format_params(params: Params) -> str:
-    """Render one parameter setting compactly: a bare value if there is one key."""
-    if len(params) == 1:
-        return str(next(iter(params.values())))
-    return ",".join(f"{k}={v}" for k, v in params.items())
+    """Render one parameter setting compactly: its values, comma-separated.
+
+    Names are left out because every setting in a grid has the same keys;
+    reports put them in the column header instead (see :func:`param_names`).
+    """
+    if not params:
+        return "-"
+    return ",".join(str(v) for v in params.values())
+
+
+def param_names(spec: StrategySpec) -> str:
+    """Column header naming the grid's parameters, in the order they print."""
+    return ",".join(spec.grid[0].keys()) or "Params"
