@@ -34,6 +34,7 @@ from .events import (
     SignalEvent,
 )
 from .execution import SimulatedExecutionHandler
+from .leaks import LeakReport, detect_look_ahead
 from .metrics import PerformanceMetrics, compute_metrics
 from .portfolio import Portfolio, PortfolioSnapshot
 from .slippage import (
@@ -65,6 +66,7 @@ __all__ = [
     "FixedBpsSlippage",
     "Fold",
     "HistoricBarDataHandler",
+    "LeakReport",
     "LookAheadDataHandler",
     "LookAheadError",
     "LookAheadMomentumStrategy",
@@ -89,6 +91,7 @@ __all__ = [
     "ZeroSlippage",
     "bars_from_series",
     "compute_metrics",
+    "detect_look_ahead",
     "generate_price_series",
     "load_csv_bars",
     "param_grid",

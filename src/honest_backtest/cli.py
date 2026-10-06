@@ -124,6 +124,11 @@ def build_audit_parser() -> argparse.ArgumentParser:
             "file has real opens, else next_close; close drops the rung"
         ),
     )
+    parser.add_argument(
+        "--no-leak-check",
+        action="store_true",
+        help="skip replaying the strategy with altered futures to look for look-ahead",
+    )
     parser.add_argument("--markdown", action="store_true", help="also print Markdown")
     return parser
 
@@ -154,13 +159,15 @@ def audit_main(argv: list[str]) -> int:
         impact_coefficient=args.impact,
         commission_bps=args.commission_bps,
         commission_per_share=args.commission_per_share,
+        check_leaks=not args.no_leak_check,
     )
     started = time.perf_counter()
     result = run_audit(bars, spec, config)
     print(render_audit_report(result, markdown=args.markdown))
     print()
     print(f"Completed in {time.perf_counter() - started:.1f}s.")
-    return 0
+    # A leak makes every number above meaningless, so fail loudly for CI.
+    return 1 if result.leaks is not None and result.leaks.findings else 0
 
 
 def main(argv: list[str] | None = None) -> int:

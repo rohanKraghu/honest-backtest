@@ -21,6 +21,7 @@ import numpy as np
 from .commission import CommissionModel, PercentOfNotionalCommission, PerShareCommission
 from .data import Bar
 from .experiments import LadderResult, LadderSettings, momentum_spec, run_ladder
+from .leaks import LeakReport, detect_look_ahead
 from .report import render_costs, render_markdown_table, render_table
 from .slippage import SlippageModel, SpreadPlusImpactSlippage
 from .spec import StrategySpec, param_names
@@ -99,6 +100,9 @@ class AuditConfig:
             equity brokers.
         commission_per_share: Per-share fee when ``commission_bps`` is unset.
         commission_minimum: Minimum per-share-model fee per order.
+        check_leaks: Before running the ladder, replay the strategy with the
+            future replaced at several points and confirm no past signal
+            changes (see :mod:`honest_backtest.leaks`).
     """
 
     settings: LadderSettings = LadderSettings()
@@ -107,6 +111,7 @@ class AuditConfig:
     commission_bps: float | None = None
     commission_per_share: float = 0.005
     commission_minimum: float = 1.0
+    check_leaks: bool = True
 
     def commission(self) -> CommissionModel:
         """Build the configured commission model."""
@@ -133,6 +138,7 @@ class AuditResult:
     spec: StrategySpec
     bars: list[Bar]
     config: AuditConfig
+    leaks: LeakReport | None = None
 
     @property
     def years_scored(self) -> float:
@@ -157,6 +163,7 @@ def run_audit(
     """Run the degradation ladder for ``spec`` on ``bars``."""
     config = config or AuditConfig()
     bars = list(bars)
+    leaks = detect_look_ahead(bars, spec) if config.check_leaks else None
     ladder = run_ladder(
         bars,
         spec,
@@ -164,7 +171,7 @@ def run_audit(
         slippage=config.slippage(bars),
         commission=config.commission(),
     )
-    return AuditResult(ladder=ladder, spec=spec, bars=bars, config=config)
+    return AuditResult(ladder=ladder, spec=spec, bars=bars, config=config, leaks=leaks)
 
 
 def _when(bar: Bar) -> str:
@@ -184,6 +191,7 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
         if abs(t) > 2.0
         else "NOT distinguishable from zero"
     )
+    leak_line = "skipped" if result.leaks is None else result.leaks.summary()
     lines = [
         f"honest-backtest audit - {result.spec.name}",
         f"  instrument          {first.symbol}",
@@ -195,6 +203,7 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
         f"(train {cfg.train_size}, test {cfg.test_size}, non-overlapping)",
         f"  settings tried      {len(result.spec.grid)} per fit",
         f"  next-bar fills      {cfg.fill_timing}",
+        f"  look-ahead check    {leak_line}",
         "",
         render_table(ladder, param_header=param_names(result.spec)),
         "",
@@ -212,6 +221,12 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
         f"  Sharpe fell monotonically at every rung: "
         f"{'yes' if ladder.is_monotone else 'NO - reported as measured'}",
     ]
+    if result.leaks is not None and result.leaks.findings:
+        lines.insert(
+            0,
+            "WARNING: this strategy's past signals change when the future does.\n"
+            "Every number below is contaminated by look-ahead; fix the leak first.\n",
+        )
     if len(result.spec.grid) > 1:
         lines.append(
             f"  The in-sample rungs picked the best of {len(result.spec.grid)} "
