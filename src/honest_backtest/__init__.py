@@ -36,6 +36,17 @@ from .events import (
 from .execution import SimulatedExecutionHandler
 from .financing import Financing
 from .leaks import LeakReport, detect_look_ahead
+from .live import (
+    CsvTailFeed,
+    Feed,
+    FeedError,
+    LiveDataHandler,
+    PaperState,
+    PaperTrader,
+    PollingFeed,
+    ReplayFeed,
+    read_journal,
+)
 from .metrics import PerformanceMetrics, compute_metrics
 from .multiasset import (
     CrossSectionalMomentumStrategy,
@@ -68,16 +79,20 @@ __all__ = [
     "Bar",
     "BuyAndHoldStrategy",
     "CSVFormatError",
+    "CsvTailFeed",
     "CrossSectionalMomentumStrategy",
     "CommissionModel",
     "DataHandler",
     "EventType",
+    "Feed",
+    "FeedError",
     "FillEvent",
     "Financing",
     "FixedBpsSlippage",
     "Fold",
     "HistoricBarDataHandler",
     "LeakReport",
+    "LiveDataHandler",
     "LookAheadDataHandler",
     "LookAheadError",
     "LookAheadMomentumStrategy",
@@ -85,12 +100,16 @@ __all__ = [
     "MultiAssetDataHandler",
     "MultiAssetPortfolio",
     "OrderEvent",
+    "PaperState",
+    "PaperTrader",
     "PerShareCommission",
     "PercentOfNotionalCommission",
     "PermanentImpactSlippage",
     "PerformanceMetrics",
+    "PollingFeed",
     "Portfolio",
     "PortfolioSnapshot",
+    "ReplayFeed",
     "SignalEvent",
     "SimulatedExecutionHandler",
     "SlippageModel",
@@ -111,6 +130,7 @@ __all__ = [
     "load_csv_bars",
     "load_csv_panel",
     "param_grid",
+    "read_journal",
     "run_backtest",
     "__version__",
 ]
