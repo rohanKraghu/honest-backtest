@@ -9,6 +9,7 @@ unfalsifiable "costs" number.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from queue import Queue
 
@@ -115,6 +116,20 @@ class SimulatedExecutionHandler:
             )
         else:
             self._working.append(_Working(order, order.quantity, None, True))
+
+    def working_orders(self) -> list[tuple[OrderEvent, float, int | None, bool]]:
+        """What is still working, as ``(order, remaining, expires, fresh)``.
+
+        For saving a paper-trading session; :meth:`restore_working` puts
+        these back after a restart.
+        """
+        return [(w.order, w.remaining, w.expires, w.fresh) for w in self._working]
+
+    def restore_working(
+        self, items: Sequence[tuple[OrderEvent, float, int | None, bool]]
+    ) -> None:
+        """Replace what is working with orders saved by :meth:`working_orders`."""
+        self._working = [_Working(*item) for item in items]
 
     def fill_pending(self) -> list[FillEvent]:
         """Fill what is still working, against the bar that just arrived.
