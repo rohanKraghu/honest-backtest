@@ -721,14 +721,16 @@ Sizes are rough: S is a few hours, M a day or two, L longer.
   journal and resume.
 - A PyPI-ready package (`honest-backtester`, since `honest-backtest` is taken
   on PyPI), an MkDocs site and a release workflow. Nothing is published yet.
+- Combinatorial purged cross-validation (`audit --cpcv`): a distribution of
+  out-of-sample Sharpe across purged, embargoed folds.
+- Config files (`--config`, JSON or YAML) and machine-readable results
+  (`--json`).
 
 **Planned**
 
 | Item | What it adds | Size |
 | --- | --- | --- |
-| Purged and embargoed k-fold (CPCV), in review | A distribution of out-of-sample Sharpe instead of one walk-forward path | M |
 | Parquet input and an optional yfinance loader | More ways in besides CSV | S |
-| Config files and JSON results, in review | Reproducible runs without long command lines | S |
 | First PyPI release and a live docs site | `pip install honest-backtester`, once the name is settled | S |
 
 ## License
