@@ -68,3 +68,22 @@ def test_degenerate_inputs_are_uninformative_not_errors():
     assert probabilistic_sharpe(np.zeros(100)) == 0.5
     assert probabilistic_sharpe(np.array([0.01, 0.02])) == 0.5
     assert 0.0 <= deflated_sharpe(np.zeros(100), [0.0, 0.0]) <= 1.0
+
+
+def test_every_rung_reports_a_probability_and_in_sample_rungs_are_deflated():
+    from honest_backtest.experiments import StudyConfig, run_study
+    from honest_backtest.synthetic import SyntheticConfig
+
+    study = run_study(
+        StudyConfig(
+            synthetic=SyntheticConfig(n_bars=1008),
+            seed=7,
+            lookback_grid=(5, 20, 60),
+            train_size=252,
+            test_size=252,
+        )
+    )
+    for stage in study.stages:
+        assert 0.0 <= stage.p_edge <= 1.0, stage.name
+    # The look-ahead rung is near certain; the honest rung is far from it.
+    assert study.stages[0].p_edge > study.stages[-1].p_edge
