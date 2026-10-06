@@ -170,6 +170,11 @@ class Backtest:
                 self.event_counts[event.type.value] += 1
 
                 if isinstance(event, MarketEvent):
+                    # Orders held over from the previous bar fill first, so
+                    # this bar's snapshot already reflects them.
+                    for fill in self.execution.fill_pending():
+                        self.event_counts[fill.type.value] += 1
+                        self.portfolio.on_fill(fill)
                     self.portfolio.on_market(event)
                     self.strategy.calculate_signals(event)
                 elif isinstance(event, SignalEvent):
@@ -213,6 +218,7 @@ def run_backtest(
     bars_per_year: int = 252,
     allow_look_ahead: bool = False,
     symbol: str = "SYNTH",
+    fill_timing: str = "close",
 ) -> BacktestResult:
     """Wire up one backtest and run it.
 
@@ -233,6 +239,8 @@ def run_backtest(
             :class:`~honest_backtest.data.LookAheadDataHandler`. Only stage 1
             of the degradation study sets this.
         symbol: Instrument name.
+        fill_timing: When orders fill; see
+            :class:`~honest_backtest.execution.SimulatedExecutionHandler`.
 
     Returns:
         The :class:`BacktestResult`.
@@ -253,6 +261,7 @@ def run_backtest(
         data=data,
         slippage=slippage or ZeroSlippage(),
         commission=commission or ZeroCommission(),
+        fill_timing=fill_timing,
     )
     return Backtest(
         data=data,
