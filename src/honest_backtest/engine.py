@@ -32,6 +32,7 @@ from .commission import CommissionModel, ZeroCommission
 from .data import Bar, DataHandler, HistoricBarDataHandler, LookAheadDataHandler
 from .events import EventType, FillEvent, MarketEvent, OrderEvent, SignalEvent
 from .execution import SimulatedExecutionHandler
+from .financing import Financing
 from .metrics import PerformanceMetrics, compute_metrics, simple_returns
 from .portfolio import Portfolio, PortfolioSnapshot
 from .slippage import SlippageModel, ZeroSlippage
@@ -71,6 +72,7 @@ class BacktestResult:
         final_position: Units held after every fill.
         unfilled_quantity: Units ordered but never traded: leftovers
             cancelled by a newer order, and limit orders that expired.
+        total_financing: Net interest and lending fees paid over the run.
     """
 
     timestamps: list[int]
@@ -90,6 +92,7 @@ class BacktestResult:
     final_cash: float = 0.0
     final_position: float = 0.0
     unfilled_quantity: float = 0.0
+    total_financing: float = 0.0
 
     @property
     def scored_equity(self) -> np.ndarray:
@@ -208,6 +211,7 @@ class Backtest:
             final_position=self.portfolio.position,
             unfilled_quantity=self.execution.cancelled_quantity
             + self.execution.expired_quantity,
+            total_financing=self.portfolio.total_financing,
         )
 
 
@@ -227,6 +231,7 @@ def run_backtest(
     max_participation: float | None = None,
     limit_offset_bps: float | None = None,
     limit_expiry_bars: int = 1,
+    financing: Financing | None = None,
 ) -> BacktestResult:
     """Wire up one backtest and run it.
 
@@ -254,6 +259,8 @@ def run_backtest(
         limit_offset_bps: Rebalance with passive limit orders this far
             inside the close; ``None`` means market orders.
         limit_expiry_bars: Bars a limit order rests before cancellation.
+        financing: Interest, borrow fees and leverage limit; ``None`` means
+            holding a position is free.
 
     Returns:
         The :class:`BacktestResult`.
@@ -274,6 +281,7 @@ def run_backtest(
         rebalance_threshold=rebalance_threshold,
         limit_offset_bps=limit_offset_bps,
         limit_expiry_bars=limit_expiry_bars,
+        financing=financing,
     )
     execution = SimulatedExecutionHandler(
         events=events,
