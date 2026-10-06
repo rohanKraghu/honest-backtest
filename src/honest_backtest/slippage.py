@@ -182,29 +182,29 @@ class PermanentImpactSlippage(SpreadPlusImpactSlippage):
 
     def reset(self) -> None:
         """Clear the outstanding push between runs."""
-        self._push = 0.0  # signed, as a fraction of price
-        self._push_time: int | None = None
+        # Per instrument: (signed push as a fraction of price, bar it was set).
+        self._push: dict[str, tuple[float, int]] = {}
 
-    def outstanding_push(self, timestamp: int) -> float:
-        """The signed push still outstanding at bar ``timestamp``."""
-        if self._push_time is None or self._push == 0.0:
-            return 0.0
-        elapsed = max(0, timestamp - self._push_time)
-        return self._push * 0.5 ** (elapsed / self.half_life_bars)
+    def outstanding_push(self, timestamp: int, symbol: str = "SYNTH") -> float:
+        """The signed push on ``symbol`` still outstanding at bar ``timestamp``."""
+        push, since = self._push.get(symbol, (0.0, timestamp))
+        elapsed = max(0, timestamp - since)
+        return push * 0.5 ** (elapsed / self.half_life_bars)
 
     def fill_price(self, order: OrderEvent, bar: Bar) -> float:
         """Return the temporary-impact price plus any adverse outstanding push."""
         sign = 1.0 if order.direction == "BUY" else -1.0
-        push = self.outstanding_push(bar.timestamp)
+        push = self.outstanding_push(bar.timestamp, order.symbol)
         adverse = max(0.0, sign * push)
         price = super().fill_price(order, bar) + bar.close * sign * adverse
 
         volume = max(bar.volume, 1.0)
         participation = min(order.quantity / volume, 1.0)
-        self._push = (
-            push + sign * self.permanent_coefficient * self.bar_volatility * participation
+        self._push[order.symbol] = (
+            push
+            + sign * self.permanent_coefficient * self.bar_volatility * participation,
+            bar.timestamp,
         )
-        self._push_time = bar.timestamp
         return price
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic

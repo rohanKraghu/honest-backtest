@@ -37,6 +37,13 @@ from .execution import SimulatedExecutionHandler
 from .financing import Financing
 from .leaks import LeakReport, detect_look_ahead
 from .metrics import PerformanceMetrics, compute_metrics
+from .multiasset import (
+    CrossSectionalMomentumStrategy,
+    MultiAssetDataHandler,
+    MultiAssetPortfolio,
+    align_panel,
+    load_csv_panel,
+)
 from .portfolio import Portfolio, PortfolioSnapshot
 from .slippage import (
     FixedBpsSlippage,
@@ -61,6 +68,7 @@ __all__ = [
     "Bar",
     "BuyAndHoldStrategy",
     "CSVFormatError",
+    "CrossSectionalMomentumStrategy",
     "CommissionModel",
     "DataHandler",
     "EventType",
@@ -74,6 +82,8 @@ __all__ = [
     "LookAheadError",
     "LookAheadMomentumStrategy",
     "MarketEvent",
+    "MultiAssetDataHandler",
+    "MultiAssetPortfolio",
     "OrderEvent",
     "PerShareCommission",
     "PercentOfNotionalCommission",
@@ -93,11 +103,13 @@ __all__ = [
     "WalkForwardSplitter",
     "ZeroCommission",
     "ZeroSlippage",
+    "align_panel",
     "bars_from_series",
     "compute_metrics",
     "detect_look_ahead",
     "generate_price_series",
     "load_csv_bars",
+    "load_csv_panel",
     "param_grid",
     "run_backtest",
     "__version__",

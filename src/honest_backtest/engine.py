@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from queue import Empty, Queue
-from typing import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 import numpy as np
 
@@ -34,6 +34,7 @@ from .events import EventType, FillEvent, MarketEvent, OrderEvent, SignalEvent
 from .execution import SimulatedExecutionHandler
 from .financing import Financing
 from .metrics import PerformanceMetrics, compute_metrics, simple_returns
+from .multiasset import MultiAssetDataHandler, MultiAssetPortfolio
 from .portfolio import Portfolio, PortfolioSnapshot
 from .slippage import SlippageModel, ZeroSlippage
 from .strategy import Strategy
@@ -216,7 +217,7 @@ class Backtest:
 
 
 def run_backtest(
-    bars: list[Bar],
+    bars: list[Bar] | Mapping[str, Sequence[Bar]],
     strategy_factory: StrategyFactory,
     *,
     slippage: SlippageModel | None = None,
@@ -236,7 +237,8 @@ def run_backtest(
     """Wire up one backtest and run it.
 
     Args:
-        bars: Bars to replay.
+        bars: Bars to replay, or a panel of bars per instrument (see
+            :mod:`~honest_backtest.multiasset`), which runs a multi-asset book.
         strategy_factory: Callable ``(queue, data_handler) -> Strategy``. A
             factory rather than an instance, because the strategy needs the
             queue and handler that this particular run creates, and because
@@ -270,19 +272,35 @@ def run_backtest(
         # One model instance serves every run of a ladder; stateful models
         # (permanent impact) must not carry one run's trades into the next.
         slippage.reset()
-    handler_cls = LookAheadDataHandler if allow_look_ahead else HistoricBarDataHandler
-    data = handler_cls(events, bars, symbol=symbol)
-    strategy = strategy_factory(events, data)
-    portfolio = Portfolio(
-        events=events,
-        data=data,
-        symbol=symbol,
-        initial_capital=initial_capital,
-        rebalance_threshold=rebalance_threshold,
-        limit_offset_bps=limit_offset_bps,
-        limit_expiry_bars=limit_expiry_bars,
-        financing=financing,
-    )
+    portfolio: Portfolio | MultiAssetPortfolio
+    if isinstance(bars, Mapping):
+        if allow_look_ahead:
+            raise ValueError("the look-ahead demonstration is single-instrument only")
+        data: DataHandler = MultiAssetDataHandler(events, bars)
+        strategy = strategy_factory(events, data)
+        portfolio = MultiAssetPortfolio(
+            events=events,
+            data=data,
+            initial_capital=initial_capital,
+            rebalance_threshold=rebalance_threshold,
+            limit_offset_bps=limit_offset_bps,
+            limit_expiry_bars=limit_expiry_bars,
+            financing=financing,
+        )
+    else:
+        handler_cls = LookAheadDataHandler if allow_look_ahead else HistoricBarDataHandler
+        data = handler_cls(events, bars, symbol=symbol)
+        strategy = strategy_factory(events, data)
+        portfolio = Portfolio(
+            events=events,
+            data=data,
+            symbol=symbol,
+            initial_capital=initial_capital,
+            rebalance_threshold=rebalance_threshold,
+            limit_offset_bps=limit_offset_bps,
+            limit_expiry_bars=limit_expiry_bars,
+            financing=financing,
+        )
     execution = SimulatedExecutionHandler(
         events=events,
         data=data,
