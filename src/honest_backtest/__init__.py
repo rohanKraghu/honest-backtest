@@ -34,6 +34,7 @@ from .events import (
     SignalEvent,
 )
 from .execution import SimulatedExecutionHandler
+from .financing import Financing
 from .leaks import LeakReport, detect_look_ahead
 from .metrics import PerformanceMetrics, compute_metrics
 from .portfolio import Portfolio, PortfolioSnapshot
@@ -64,6 +65,7 @@ __all__ = [
     "DataHandler",
     "EventType",
     "FillEvent",
+    "Financing",
     "FixedBpsSlippage",
     "Fold",
     "HistoricBarDataHandler",
