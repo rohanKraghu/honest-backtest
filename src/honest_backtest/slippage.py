@@ -29,6 +29,14 @@ class SlippageModel(ABC):
         ``bar.close`` for the order's direction.
         """
 
+    def reset(self) -> None:  # noqa: B027 - optional hook, a no-op by default
+        """Forget any state from a previous run.
+
+        Called by :func:`~honest_backtest.engine.run_backtest` before every
+        run, because one model instance is shared by every run of a ladder.
+        Stateless models need do nothing.
+        """
+
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"{type(self).__name__}()"
 
@@ -86,7 +94,8 @@ class SpreadPlusImpactSlippage(SlippageModel):
     This is the model used in the headline result. It is a simplification:
     it is a single-bar temporary impact model with no permanent component and
     no decay, so it will understate the cost of a strategy that trades the
-    same direction repeatedly.
+    same direction repeatedly. :class:`PermanentImpactSlippage` adds that
+    component.
 
     Args:
         half_spread_bps: Half-spread in basis points.
@@ -122,4 +131,86 @@ class SpreadPlusImpactSlippage(SlippageModel):
         return (
             f"SpreadPlusImpactSlippage(half_spread_bps={self.half_spread_bps}, "
             f"impact_coefficient={self.impact_coefficient})"
+        )
+
+
+class PermanentImpactSlippage(SpreadPlusImpactSlippage):
+    """Spread and temporary impact, plus permanent impact that decays.
+
+    Each fill leaves a lasting push on the price in its own direction,
+    ``permanent_coefficient * volatility * participation`` (linear in size,
+    as in Almgren and Chriss), which then decays with a half-life of
+    ``half_life_bars``. A later fill in the same direction pays the push
+    still outstanding on top of its own spread and temporary impact, so a
+    strategy that keeps buying is charged for walking the price up against
+    itself.
+
+    One deliberate asymmetry keeps the model adverse by construction: a
+    fill against the outstanding push (selling after buying) is not paid
+    back for it. The marks come from the data, which never saw your trades,
+    so crediting the reversal would book a gain the equity curve cannot
+    show. This overstates cost slightly for strategies that reverse quickly,
+    which is the safe direction to be wrong in.
+
+    Args:
+        half_spread_bps: Half-spread in basis points.
+        impact_coefficient: Scales the square-root temporary impact.
+        bar_volatility: Per-bar volatility used to scale both impacts.
+        permanent_coefficient: Scales the linear permanent impact.
+        half_life_bars: Bars for the outstanding push to halve. ``inf``
+            means it never decays.
+    """
+
+    name = "spread_impact_permanent"
+
+    def __init__(
+        self,
+        half_spread_bps: float = 2.0,
+        impact_coefficient: float = 0.6,
+        bar_volatility: float = 0.0126,
+        permanent_coefficient: float = 0.3,
+        half_life_bars: float = 5.0,
+    ) -> None:
+        super().__init__(half_spread_bps, impact_coefficient, bar_volatility)
+        if permanent_coefficient < 0 or not half_life_bars > 0:
+            raise ValueError(
+                "permanent_coefficient must be non-negative and half_life_bars positive"
+            )
+        self.permanent_coefficient = float(permanent_coefficient)
+        self.half_life_bars = float(half_life_bars)
+        self.reset()
+
+    def reset(self) -> None:
+        """Clear the outstanding push between runs."""
+        self._push = 0.0  # signed, as a fraction of price
+        self._push_time: int | None = None
+
+    def outstanding_push(self, timestamp: int) -> float:
+        """The signed push still outstanding at bar ``timestamp``."""
+        if self._push_time is None or self._push == 0.0:
+            return 0.0
+        elapsed = max(0, timestamp - self._push_time)
+        return self._push * 0.5 ** (elapsed / self.half_life_bars)
+
+    def fill_price(self, order: OrderEvent, bar: Bar) -> float:
+        """Return the temporary-impact price plus any adverse outstanding push."""
+        sign = 1.0 if order.direction == "BUY" else -1.0
+        push = self.outstanding_push(bar.timestamp)
+        adverse = max(0.0, sign * push)
+        price = super().fill_price(order, bar) + bar.close * sign * adverse
+
+        volume = max(bar.volume, 1.0)
+        participation = min(order.quantity / volume, 1.0)
+        self._push = (
+            push + sign * self.permanent_coefficient * self.bar_volatility * participation
+        )
+        self._push_time = bar.timestamp
+        return price
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return (
+            f"PermanentImpactSlippage(half_spread_bps={self.half_spread_bps}, "
+            f"impact_coefficient={self.impact_coefficient}, "
+            f"permanent_coefficient={self.permanent_coefficient}, "
+            f"half_life_bars={self.half_life_bars})"
         )
