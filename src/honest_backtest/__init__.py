@@ -71,7 +71,12 @@ from .strategy import (
     TimeSeriesMomentumStrategy,
 )
 from .synthetic import SyntheticConfig, SyntheticSeries, generate_price_series
-from .walkforward import Fold, WalkForwardSplitter
+from .walkforward import (
+    CombinatorialPurgedSplitter,
+    CombinatorialSplit,
+    Fold,
+    WalkForwardSplitter,
+)
 
 __all__ = [
     "Backtest",
@@ -79,6 +84,8 @@ __all__ = [
     "Bar",
     "BuyAndHoldStrategy",
     "CSVFormatError",
+    "CombinatorialPurgedSplitter",
+    "CombinatorialSplit",
     "CsvTailFeed",
     "CrossSectionalMomentumStrategy",
     "CommissionModel",

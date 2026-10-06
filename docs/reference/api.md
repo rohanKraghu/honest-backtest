@@ -36,6 +36,22 @@ The most used names are importable from `honest_backtest` directly.
 
 ::: honest_backtest.leaks.detect_look_ahead
 
+## Cross-validation
+
+::: honest_backtest.walkforward.CombinatorialPurgedSplitter
+
+::: honest_backtest.experiments.run_cpcv
+
+::: honest_backtest.experiments.CPCVResult
+
+## Settings files and JSON
+
+::: honest_backtest.config.load_config_file
+
+::: honest_backtest.export
+    options:
+      members: [audit_dict, study_dict, to_json]
+
 ## Costs
 
 ::: honest_backtest.slippage.SpreadPlusImpactSlippage

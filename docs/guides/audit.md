@@ -58,4 +58,12 @@ the in-sample headline down to the out-of-sample number, every rung's equity
 curve against buy and hold, and the costs paid per rung. It has no scripts and
 fetches nothing, so it opens offline and can be attached as it is.
 
+## More than one path, and results for other programs
+
+`--cpcv 6,2` adds combinatorial purged cross-validation after the ladder, to
+show how far one out-of-sample Sharpe can land from another; see
+[Cross-validation paths](cross-validation.md). `--config audit.yaml` reads the
+flags from a file and `--json results.json` writes every number in the report;
+see [Settings files and JSON](config-and-json.md).
+
 Every flag is listed in the [command-line reference](../reference/cli.md).

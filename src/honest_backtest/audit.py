@@ -20,16 +20,24 @@ import numpy as np
 
 from .commission import CommissionModel, PercentOfNotionalCommission, PerShareCommission
 from .data import Bar
-from .experiments import LadderResult, LadderSettings, momentum_spec, run_ladder
+from .experiments import (
+    CPCVResult,
+    LadderResult,
+    LadderSettings,
+    momentum_spec,
+    run_cpcv,
+    run_ladder,
+)
 from .html_report import ReportContext, render_html
 from .leaks import LeakReport, detect_look_ahead
-from .report import render_costs, render_markdown_table, render_table
+from .report import render_costs, render_cpcv, render_markdown_table, render_table
 from .slippage import (
     PermanentImpactSlippage,
     SlippageModel,
     SpreadPlusImpactSlippage,
 )
 from .spec import StrategySpec, param_names
+from .walkforward import CombinatorialPurgedSplitter
 
 #: Names accepted by ``--strategy`` that refer to strategies shipped with the package.
 BUILT_IN_STRATEGIES = {"momentum": momentum_spec}
@@ -112,6 +120,14 @@ class AuditConfig:
         check_leaks: Before running the ladder, replay the strategy with the
             future replaced at several points and confirm no past signal
             changes (see :mod:`honest_backtest.leaks`).
+        cpcv: Optional ``(n_groups, n_test_groups)``. When set, the audit
+            also runs combinatorial purged cross-validation over the ladder's
+            scored window and reports the spread of path Sharpes. The ladder
+            itself is unchanged.
+        cpcv_purge: Bars purged on each side of a test block; ``None`` means
+            the strategy's warm-up, the span over which its lookback can
+            straddle a block boundary.
+        cpcv_embargo: Extra bars dropped from training after a test block.
     """
 
     settings: LadderSettings = LadderSettings()
@@ -123,6 +139,19 @@ class AuditConfig:
     check_leaks: bool = True
     permanent_impact: float = 0.0
     impact_half_life: float = 5.0
+    cpcv: tuple[int, int] | None = None
+    cpcv_purge: int | None = None
+    cpcv_embargo: int = 0
+
+    def cpcv_splitter(self, spec: StrategySpec) -> CombinatorialPurgedSplitter | None:
+        """The configured cross-validation splitter, or ``None`` if off."""
+        if self.cpcv is None:
+            return None
+        n_groups, n_test_groups = self.cpcv
+        purge = spec.warmup if self.cpcv_purge is None else self.cpcv_purge
+        return CombinatorialPurgedSplitter(
+            n_groups, n_test_groups, purge=purge, embargo=self.cpcv_embargo
+        )
 
     def commission(self) -> CommissionModel:
         """Build the configured commission model."""
@@ -159,6 +188,7 @@ class AuditResult:
     bars: list[Bar]
     config: AuditConfig
     leaks: LeakReport | None = None
+    cpcv: CPCVResult | None = None
 
     @property
     def years_scored(self) -> float:
@@ -184,14 +214,29 @@ def run_audit(
     config = config or AuditConfig()
     bars = list(bars)
     leaks = detect_look_ahead(bars, spec) if config.check_leaks else None
+    slippage, commission = config.slippage(bars), config.commission()
     ladder = run_ladder(
-        bars,
-        spec,
-        config.settings,
-        slippage=config.slippage(bars),
-        commission=config.commission(),
+        bars, spec, config.settings, slippage=slippage, commission=commission
     )
-    return AuditResult(ladder=ladder, spec=spec, bars=bars, config=config, leaks=leaks)
+    cpcv = None
+    splitter = config.cpcv_splitter(spec)
+    if splitter is not None:
+        # Same bars as every rung, so the spread sits beside the walk-forward
+        # number it is meant to put in context; and like every rung it is
+        # scored after the window the cost model was calibrated on.
+        cpcv = run_cpcv(
+            bars,
+            spec,
+            config.settings,
+            splitter,
+            slippage=slippage,
+            commission=commission,
+            start=ladder.scored_start,
+            end=ladder.scored_end,
+        )
+    return AuditResult(
+        ladder=ladder, spec=spec, bars=bars, config=config, leaks=leaks, cpcv=cpcv
+    )
 
 
 def _when(bar: Bar) -> str:
@@ -255,6 +300,8 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
             "settings on\n  the window they report, so they are biased upward "
             "by construction."
         )
+    if result.cpcv is not None:
+        lines += ["", render_cpcv(result.cpcv, walk_forward_sharpe=honest)]
     if markdown:
         lines += [
             "",
@@ -321,5 +368,6 @@ def render_audit_html(result: AuditResult) -> str:
         warning=warning,
         param_header=param_names(result.spec),
         dates=[_when(b) for b in scored],
+        cpcv=result.cpcv,
     )
     return render_html(ladder, context)

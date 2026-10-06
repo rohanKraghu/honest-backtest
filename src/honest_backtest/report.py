@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .experiments import LadderResult, SeedSweep, StudyResult
+from .experiments import CPCVResult, LadderResult, SeedSweep, StudyResult
 from .spec import Params, format_params
 
 _HEADERS = (
@@ -97,6 +97,30 @@ def render_costs(result: LadderResult) -> str:
             f"slippage {m.slippage_cost:>12,.0f}   "
             f"commission {m.commission_cost:>10,.0f}   "
             f"turnover {m.annual_turnover:>5.1f}x/yr"
+        )
+    return "\n".join(lines)
+
+
+def render_cpcv(cpcv: CPCVResult, walk_forward_sharpe: float | None = None) -> str:
+    """Render the distribution of out-of-sample Sharpe across CPCV paths."""
+    q1, q3 = cpcv.quartiles
+    n_bars = cpcv.end - cpcv.start
+    lines = [
+        f"Combinatorial purged cross-validation ({cpcv.n_groups} groups, "
+        f"{cpcv.n_test_groups} held out per split; purge {cpcv.purge}, "
+        f"embargo {cpcv.embargo} bars):",
+        f"  {len(cpcv.splits)} splits, {cpcv.n_paths} paths over the same {n_bars} "
+        f"bars, every bar tested {cpcv.n_paths} times",
+        f"  Path Sharpe  median {cpcv.median:6.2f}   quartiles {q1:.2f} to {q3:.2f}"
+        f"   range {cpcv.path_sharpes.min():.2f} to {cpcv.path_sharpes.max():.2f}",
+        f"  Paths below zero: {cpcv.n_below_zero} of {cpcv.n_paths} "
+        f"({cpcv.share_below_zero * 100:.0f}%)",
+    ]
+    if walk_forward_sharpe is not None:
+        lines.append(
+            f"  Walk-forward's one path scored {walk_forward_sharpe:.2f}; the spread "
+            "above is how far\n  one out-of-sample path can land from another with "
+            "different training data."
         )
     return "\n".join(lines)
 

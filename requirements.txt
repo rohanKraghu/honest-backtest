@@ -12,6 +12,10 @@ numpy==2.2.6
 # followed by `pytest` works from a clean clone with no second step.
 pytest==8.3.5
 
+# Optional for the package (YAML --config files; JSON needs nothing), pinned
+# here so the YAML tests run from a clean clone.
+pyyaml==6.0.3
+
 # Transitive, pinned for a fully reproducible environment.
 iniconfig==2.3.0
 packaging==26.3

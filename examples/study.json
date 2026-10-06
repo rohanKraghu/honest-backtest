@@ -1,0 +1,7 @@
+{
+  "seed": 20260921,
+  "seeds": 12,
+  "bars": 2520,
+  "train_size": 504,
+  "test_size": 252
+}

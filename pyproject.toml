@@ -44,7 +44,9 @@ classifiers = [
 dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
-dev = ["pytest==8.3.5", "ruff", "build", "twine"]
+# YAML study and audit configs (--config file.yaml). JSON configs need nothing.
+yaml = ["pyyaml>=6"]
+dev = ["pytest==8.3.5", "pyyaml==6.0.3", "ruff", "build", "twine"]
 # MkDocs 2 drops plugins, which the site relies on.
 docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "ruff"]
 

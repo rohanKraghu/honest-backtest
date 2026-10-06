@@ -1,0 +1,35 @@
+# Settings for `honest-backtest audit --config examples/audit.yaml`.
+#
+# Keys are the command's long option names (dashes or underscores both work),
+# and each value is checked exactly as the flag would be. Flags given on the
+# command line override this file, so
+#     honest-backtest audit --config examples/audit.yaml --fill close
+# reruns this audit without the next-bar rung. Relative paths are resolved
+# against this file's directory. YAML needs PyYAML (pip install pyyaml); the
+# same mapping written as JSON needs nothing.
+
+data: sample_prices.csv
+strategy: sma_crossover.py
+
+# Walk-forward windows and the account.
+train_size: 504
+test_size: 252
+bars_per_year: 252
+capital: 1000000
+rebalance_band: 0.05
+
+# Costs: half-spread and square-root impact, plus a per-share fee.
+half_spread_bps: 2.0
+impact: 0.6
+commission_per_share: 0.005
+
+# Next-bar fills: next_open when the file has real opens, else next_close.
+fill: auto
+
+# Combinatorial purged cross-validation: 6 groups, 2 held out per split,
+# purge defaults to the strategy's warm-up.
+cpcv: [6, 2]
+cpcv_embargo: 0
+
+# Machine-readable results, next to this file.
+# json: audit_results.json
