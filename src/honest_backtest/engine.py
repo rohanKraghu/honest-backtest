@@ -69,6 +69,8 @@ class BacktestResult:
             and ``final_cash`` / ``final_position`` give the true end state.
         final_cash: Cash after every fill, including the last bar's.
         final_position: Units held after every fill.
+        unfilled_quantity: Units ordered but never traded: leftovers
+            cancelled by a newer order, and limit orders that expired.
     """
 
     timestamps: list[int]
@@ -87,6 +89,7 @@ class BacktestResult:
     snapshots: list[PortfolioSnapshot] = field(default_factory=list)
     final_cash: float = 0.0
     final_position: float = 0.0
+    unfilled_quantity: float = 0.0
 
     @property
     def scored_equity(self) -> np.ndarray:
@@ -203,6 +206,8 @@ class Backtest:
             snapshots=list(self.portfolio.history),
             final_cash=self.portfolio.cash,
             final_position=self.portfolio.position,
+            unfilled_quantity=self.execution.cancelled_quantity
+            + self.execution.expired_quantity,
         )
 
 
@@ -219,6 +224,9 @@ def run_backtest(
     allow_look_ahead: bool = False,
     symbol: str = "SYNTH",
     fill_timing: str = "close",
+    max_participation: float | None = None,
+    limit_offset_bps: float | None = None,
+    limit_expiry_bars: int = 1,
 ) -> BacktestResult:
     """Wire up one backtest and run it.
 
@@ -241,6 +249,11 @@ def run_backtest(
         symbol: Instrument name.
         fill_timing: When orders fill; see
             :class:`~honest_backtest.execution.SimulatedExecutionHandler`.
+        max_participation: Cap on each fill as a fraction of bar volume;
+            ``None`` means unlimited liquidity.
+        limit_offset_bps: Rebalance with passive limit orders this far
+            inside the close; ``None`` means market orders.
+        limit_expiry_bars: Bars a limit order rests before cancellation.
 
     Returns:
         The :class:`BacktestResult`.
@@ -259,6 +272,8 @@ def run_backtest(
         symbol=symbol,
         initial_capital=initial_capital,
         rebalance_threshold=rebalance_threshold,
+        limit_offset_bps=limit_offset_bps,
+        limit_expiry_bars=limit_expiry_bars,
     )
     execution = SimulatedExecutionHandler(
         events=events,
@@ -266,6 +281,7 @@ def run_backtest(
         slippage=slippage or ZeroSlippage(),
         commission=commission or ZeroCommission(),
         fill_timing=fill_timing,
+        max_participation=max_participation,
     )
     return Backtest(
         data=data,
