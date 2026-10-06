@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from queue import Queue
 from typing import Iterable, Sequence
 
@@ -38,9 +39,10 @@ class LookAheadError(RuntimeError):
 class Bar:
     """A single OHLCV observation.
 
-    ``timestamp`` is an integer bar index for the synthetic generator.  A real
-    adapter would carry a ``datetime``; nothing in the engine depends on the
-    type beyond ordering and equality, so swapping it is a local change.
+    ``timestamp`` is the bar's integer index in the series, which is all the
+    engine and the walk-forward splitter need.  ``time`` carries the calendar
+    date for real data (see :mod:`honest_backtest.csvdata`) and is ``None`` for
+    synthetic bars; nothing in the engine reads it, so it is for reporting only.
     """
 
     timestamp: int
@@ -50,6 +52,7 @@ class Bar:
     low: float
     close: float
     volume: float
+    time: datetime | None = None
 
 
 class DataHandler(ABC):

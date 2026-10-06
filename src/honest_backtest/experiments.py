@@ -10,13 +10,19 @@ the first training window, so if the single-fit stages were scored over the
 full sample they would be measured on a different period and the comparison
 would be contaminated. Here the only thing that changes between stage 4 and
 stage 5 is how the parameter was chosen.
+
+The ladder itself, :func:`run_ladder`, knows nothing about momentum or
+synthetic data: it takes any :class:`~honest_backtest.spec.StrategySpec` and
+any bar series. :func:`run_study` is that ladder applied to the built-in
+strategy on a synthetic path with a known edge.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, fields
 from statistics import mean, pstdev
-from typing import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -25,7 +31,12 @@ from .data import Bar
 from .engine import BacktestResult, run_backtest
 from .metrics import PerformanceMetrics, compute_metrics
 from .slippage import SlippageModel, SpreadPlusImpactSlippage, ZeroSlippage
-from .strategy import LookAheadMomentumStrategy, TimeSeriesMomentumStrategy
+from .spec import Params, StrategySpec, param_grid
+from .strategy import (
+    BuyAndHoldStrategy,
+    LookAheadMomentumStrategy,
+    TimeSeriesMomentumStrategy,
+)
 from .synthetic import SyntheticConfig, generate_price_series, oracle_sharpe
 from .walkforward import Fold, WalkForwardSplitter
 
@@ -89,6 +100,35 @@ class StudyConfig:
             per_share=self.commission_per_share, minimum=self.commission_minimum
         )
 
+    def settings(self) -> LadderSettings:
+        """The shared account and walk-forward settings for the ladder."""
+        return LadderSettings(
+            train_size=self.train_size,
+            test_size=self.test_size,
+            initial_capital=self.initial_capital,
+            rebalance_threshold=self.rebalance_threshold,
+            bars_per_year=self.synthetic.bars_per_year,
+        )
+
+
+@dataclass(frozen=True)
+class LadderSettings:
+    """The account and validation settings every rung of a ladder shares.
+
+    Attributes:
+        train_size: Walk-forward training window, in bars.
+        test_size: Walk-forward test window, in bars.
+        initial_capital: Starting cash for every run.
+        rebalance_threshold: No-trade band as a fraction of equity.
+        bars_per_year: Annualisation factor.
+    """
+
+    train_size: int = 504
+    test_size: int = 252
+    initial_capital: float = DEFAULT_INITIAL_CAPITAL
+    rebalance_threshold: float = DEFAULT_REBALANCE_THRESHOLD
+    bars_per_year: int = 252
+
 
 @dataclass(frozen=True)
 class StageResult:
@@ -99,8 +139,8 @@ class StageResult:
         name: Short label for the table.
         assumption_removed: What this stage stopped pretending.
         metrics: Performance over the scored window.
-        chosen_lookback: The parameter(s) used. A list for walk-forward,
-            where a different value may be chosen for each fold.
+        chosen_params: The parameter setting(s) used. One per walk-forward
+            fold for the out-of-sample stage, where each fold re-fits.
         honest: Whether this number is one a reviewer should take seriously.
     """
 
@@ -108,32 +148,32 @@ class StageResult:
     name: str
     assumption_removed: str
     metrics: PerformanceMetrics
-    chosen_lookback: list[int]
+    chosen_params: list[Params]
     honest: bool
+
+    @property
+    def chosen_lookback(self) -> list[Any]:
+        """The chosen value of a single-parameter grid, one per fit."""
+        return [next(iter(p.values())) for p in self.chosen_params]
 
 
 @dataclass(frozen=True)
-class StudyResult:
-    """The complete study for one seed.
+class LadderResult:
+    """Every rung of the ladder for one strategy on one bar series.
 
     Attributes:
-        stages: The five stages in order.
-        oracle_sharpe: Sharpe of a cost-free trader who knows the latent
-            state exactly. The ceiling that was injected into the data.
+        stages: The rungs in order; the last is the out-of-sample one.
         buy_hold_sharpe: Sharpe of buy-and-hold over the same window, with
             costs, as a benchmark.
-        config: The configuration used.
         scored_start: First scored bar index, shared by every stage.
         scored_end: One past the last scored bar index.
-        folds: The walk-forward folds used by stage 5.
-        n_events: Events processed by the stage-5 engine, as evidence the
-            event loop actually ran.
+        folds: The walk-forward folds used by the last stage.
+        n_events: Events processed by the out-of-sample engine runs, as
+            evidence the event loop actually ran.
     """
 
     stages: list[StageResult]
-    oracle_sharpe: float
     buy_hold_sharpe: float
-    config: StudyConfig
     scored_start: int
     scored_end: int
     folds: list[Fold]
@@ -141,52 +181,68 @@ class StudyResult:
 
     @property
     def honest_sharpe(self) -> float:
-        """The only number in the study that is out of sample."""
+        """The only number in the ladder that is out of sample."""
         return self.stages[-1].metrics.sharpe
 
     @property
     def is_monotone(self) -> bool:
         """Whether Sharpe fell at every rung. Reported, never assumed."""
         sharpes = [s.metrics.sharpe for s in self.stages]
-        return all(b <= a for a, b in zip(sharpes, sharpes[1:]))
+        return all(b <= a for a, b in zip(sharpes, sharpes[1:], strict=False))
 
 
-def _momentum_factory(lookback: int):
-    """Return a factory building an honest momentum strategy with ``lookback``."""
+@dataclass(frozen=True)
+class StudyResult(LadderResult):
+    """The complete synthetic study for one seed.
 
-    def factory(events, data):
-        return TimeSeriesMomentumStrategy(
-            events=events,
-            data=data,
-            symbol=data.symbols[0],
-            lookback=lookback,
-            vol_window=VOL_WINDOW,
-            min_vol_observations=MIN_VOL_OBSERVATIONS,
-        )
+    Attributes:
+        oracle_sharpe: Sharpe of a cost-free trader who knows the latent
+            state exactly. The ceiling that was injected into the data.
+        config: The configuration used.
+    """
 
-    return factory
+    oracle_sharpe: float = 0.0
+    config: StudyConfig = field(default_factory=StudyConfig)
 
 
-def _look_ahead_factory(lookback: int):
-    """Return a factory building the deliberately leaky strategy."""
+def _build_momentum(events, data, symbol, *, lookback):
+    return TimeSeriesMomentumStrategy(
+        events=events,
+        data=data,
+        symbol=symbol,
+        lookback=lookback,
+        vol_window=VOL_WINDOW,
+        min_vol_observations=MIN_VOL_OBSERVATIONS,
+    )
 
-    def factory(events, data):
-        return LookAheadMomentumStrategy(
-            events=events,
-            data=data,
-            symbol=data.symbols[0],
-            lookback=lookback,
-            vol_window=VOL_WINDOW,
-            min_vol_observations=MIN_VOL_OBSERVATIONS,
-        )
 
-    return factory
+def _build_look_ahead_momentum(events, data, symbol, *, lookback):
+    return LookAheadMomentumStrategy(
+        events=events,
+        data=data,
+        symbol=symbol,
+        lookback=lookback,
+        vol_window=VOL_WINDOW,
+        min_vol_observations=MIN_VOL_OBSERVATIONS,
+    )
+
+
+def momentum_spec(lookback_grid: Sequence[int] = DEFAULT_LOOKBACK_GRID) -> StrategySpec:
+    """The built-in time-series momentum strategy, with its leaky twin."""
+    return StrategySpec(
+        name="time-series momentum",
+        build=_build_momentum,
+        build_look_ahead=_build_look_ahead_momentum,
+        grid=param_grid(lookback=tuple(lookback_grid)),
+        warmup=WARMUP,
+    )
 
 
 def _run(
     bars: Sequence[Bar],
-    lookback: int,
-    cfg: StudyConfig,
+    spec: StrategySpec,
+    params: Params,
+    settings: LadderSettings,
     *,
     slippage: SlippageModel,
     commission: CommissionModel,
@@ -194,30 +250,31 @@ def _run(
     look_ahead: bool = False,
 ) -> BacktestResult:
     """Run one backtest over ``bars`` with the given friction settings."""
-    factory = _look_ahead_factory(lookback) if look_ahead else _momentum_factory(lookback)
     return run_backtest(
         list(bars),
-        factory,
+        spec.factory(params, look_ahead=look_ahead),
         slippage=slippage,
         commission=commission,
-        initial_capital=cfg.initial_capital,
-        rebalance_threshold=cfg.rebalance_threshold,
+        initial_capital=settings.initial_capital,
+        rebalance_threshold=settings.rebalance_threshold,
         warmup=warmup,
-        bars_per_year=cfg.synthetic.bars_per_year,
+        bars_per_year=settings.bars_per_year,
         allow_look_ahead=look_ahead,
+        symbol=bars[0].symbol,
     )
 
 
 def fit_in_sample(
     bars: Sequence[Bar],
-    cfg: StudyConfig,
+    spec: StrategySpec,
+    settings: LadderSettings,
     *,
     slippage: SlippageModel,
     commission: CommissionModel,
     warmup: int,
     look_ahead: bool = False,
-) -> tuple[int, BacktestResult]:
-    """Pick the lookback that maximises Sharpe on the very window being reported.
+) -> tuple[Params, BacktestResult]:
+    """Pick the parameters that maximise Sharpe on the very window being reported.
 
     This is the bad practice the study is built to expose: the parameter is
     chosen with full knowledge of the period it is then scored on. It is done
@@ -225,21 +282,23 @@ def fit_in_sample(
 
     Args:
         bars: Bars to replay.
-        cfg: Study configuration.
+        spec: The strategy and its parameter grid.
+        settings: Shared account settings.
         slippage: Slippage model.
         commission: Commission model.
         warmup: Leading bars excluded from scoring.
         look_ahead: Use the leaky handler and strategy.
 
     Returns:
-        ``(best_lookback, result_for_that_lookback)``.
+        ``(best_params, result_for_those_params)``.
     """
-    best: tuple[float, int, BacktestResult] | None = None
-    for lookback in cfg.lookback_grid:
+    best: tuple[float, Params, BacktestResult] | None = None
+    for params in spec.grid:
         result = _run(
             bars,
-            lookback,
-            cfg,
+            spec,
+            params,
+            settings,
             slippage=slippage,
             commission=commission,
             warmup=warmup,
@@ -247,19 +306,20 @@ def fit_in_sample(
         )
         sharpe = result.metrics().sharpe
         if best is None or sharpe > best[0]:
-            best = (sharpe, lookback, result)
-    assert best is not None, "lookback grid must not be empty"
+            best = (sharpe, params, result)
+    assert best is not None, "parameter grid must not be empty"
     return best[1], best[2]
 
 
 def run_walk_forward(
     bars: Sequence[Bar],
-    cfg: StudyConfig,
+    spec: StrategySpec,
+    settings: LadderSettings,
     folds: Sequence[Fold],
     *,
     slippage: SlippageModel,
     commission: CommissionModel,
-) -> tuple[PerformanceMetrics, list[int], dict[str, int]]:
+) -> tuple[PerformanceMetrics, list[Params], dict[str, int]]:
     """Re-fit on each training window, score only on the window that follows.
 
     Returns for each fold's test window are stitched into a single
@@ -269,16 +329,17 @@ def run_walk_forward(
 
     Args:
         bars: The full bar series.
-        cfg: Study configuration.
+        spec: The strategy and its parameter grid.
+        settings: Shared account settings.
         folds: Folds from :class:`~honest_backtest.walkforward.WalkForwardSplitter`.
         slippage: Slippage model.
         commission: Commission model.
 
     Returns:
-        ``(metrics, chosen_lookback_per_fold, event_counts)``.
+        ``(metrics, chosen_params_per_fold, event_counts)``.
     """
     stitched: list[np.ndarray] = []
-    chosen: list[int] = []
+    chosen: list[Params] = []
     commission_paid = 0.0
     slippage_paid = 0.0
     notional = 0.0
@@ -290,20 +351,22 @@ def run_walk_forward(
         # Train-window runs are scored after their own warm-up; this is
         # in-sample by design -- that is what "fitting" means -- but it only
         # ever touches bars strictly before the test window.
-        best_lookback, _ = fit_in_sample(
+        best_params, _ = fit_in_sample(
             train_bars,
-            cfg,
+            spec,
+            settings,
             slippage=slippage,
             commission=commission,
-            warmup=min(WARMUP, max(0, len(train_bars) - 2)),
+            warmup=min(spec.warmup, max(0, len(train_bars) - 2)),
         )
-        chosen.append(best_lookback)
+        chosen.append(best_params)
 
         eval_bars = bars[fold.eval_slice()]
         result = _run(
             eval_bars,
-            best_lookback,
-            cfg,
+            spec,
+            best_params,
+            settings,
             slippage=slippage,
             commission=commission,
             warmup=fold.warmup,
@@ -317,10 +380,10 @@ def run_walk_forward(
             events_total[key] = events_total.get(key, 0) + value
 
     returns = np.concatenate(stitched) if stitched else np.zeros(0)
-    curve = cfg.initial_capital * np.concatenate([[1.0], np.cumprod(1.0 + returns)])
+    curve = settings.initial_capital * np.concatenate([[1.0], np.cumprod(1.0 + returns)])
     metrics = compute_metrics(
         curve,
-        bars_per_year=cfg.synthetic.bars_per_year,
+        bars_per_year=settings.bars_per_year,
         n_trades=trades,
         commission_cost=commission_paid,
         slippage_cost=slippage_paid,
@@ -328,6 +391,149 @@ def run_walk_forward(
         returns=returns,
     )
     return metrics, chosen, events_total
+
+
+def run_ladder(
+    all_bars: Sequence[Bar],
+    spec: StrategySpec,
+    settings: LadderSettings,
+    *,
+    slippage: SlippageModel,
+    commission: CommissionModel,
+) -> LadderResult:
+    """Run the degradation ladder for any strategy on any bar series.
+
+    Every in-sample rung is scored over exactly the bars the walk-forward
+    rung covers, so the only thing that changes from rung to rung is the
+    assumption being removed. When ``spec`` has a look-ahead twin, the ladder
+    opens with the naive, leaky backtest; otherwise it opens with a
+    frictionless in-sample fit, which is what most backtests report.
+
+    Args:
+        all_bars: The full bar series, oldest first.
+        spec: The strategy and its parameter grid.
+        settings: Shared account and walk-forward settings.
+        slippage: The realistic slippage model.
+        commission: The realistic commission model.
+
+    Returns:
+        A :class:`LadderResult`.
+
+    Raises:
+        ValueError: If the series is too short for even one fold.
+    """
+    all_bars = list(all_bars)
+    splitter = WalkForwardSplitter(
+        train_size=settings.train_size, test_size=settings.test_size, warmup=spec.warmup
+    )
+    folds = splitter.split(len(all_bars))
+    if not folds:
+        raise ValueError(
+            f"series of {len(all_bars)} bars is too short for train_size="
+            f"{settings.train_size} and test_size={settings.test_size}"
+        )
+
+    scored_start = folds[0].test_start
+    scored_end = folds[-1].test_end
+    bars = all_bars[:scored_end]
+
+    zero_slip: SlippageModel = ZeroSlippage()
+    zero_comm: CommissionModel = ZeroCommission()
+
+    stage_specs = []
+    if spec.build_look_ahead is not None:
+        stage_specs += [
+            (
+                "Naive backtest",
+                "nothing -- look-ahead present, zero costs",
+                zero_slip,
+                zero_comm,
+                True,
+            ),
+            (
+                "+ point-in-time data",
+                "look-ahead bias (signal alignment and full-sample scaling)",
+                zero_slip,
+                zero_comm,
+                False,
+            ),
+        ]
+    else:
+        stage_specs.append(
+            (
+                "In-sample, no costs",
+                "nothing -- zero costs, parameters fitted on the reported window",
+                zero_slip,
+                zero_comm,
+                False,
+            )
+        )
+    stage_specs += [
+        ("+ slippage", "free execution at the close", slippage, zero_comm, False),
+        ("+ commissions", "zero brokerage fees", slippage, commission, False),
+    ]
+
+    stages: list[StageResult] = []
+    for i, (name, removed, slip, comm, leak) in enumerate(stage_specs, start=1):
+        params, result = fit_in_sample(
+            bars,
+            spec,
+            settings,
+            slippage=slip,
+            commission=comm,
+            warmup=scored_start,
+            look_ahead=leak,
+        )
+        stages.append(
+            StageResult(
+                index=i,
+                name=name,
+                assumption_removed=removed,
+                metrics=result.metrics(),
+                chosen_params=[params],
+                honest=False,
+            )
+        )
+
+    wf_metrics, wf_params, wf_events = run_walk_forward(
+        all_bars, spec, settings, folds, slippage=slippage, commission=commission
+    )
+    stages.append(
+        StageResult(
+            index=len(stages) + 1,
+            name="+ walk-forward OOS",
+            assumption_removed="a single in-sample parameter fit",
+            metrics=wf_metrics,
+            chosen_params=wf_params,
+            honest=True,
+        )
+    )
+
+    # Benchmark: buy and hold over the same scored window, paying the same
+    # frictions. A strategy that cannot beat this has not earned its fees.
+    def bh_factory(events, data):
+        return BuyAndHoldStrategy(events, data, symbol=data.symbols[0])
+
+    bh = run_backtest(
+        bars,
+        bh_factory,
+        slippage=slippage,
+        commission=commission,
+        initial_capital=settings.initial_capital,
+        rebalance_threshold=settings.rebalance_threshold,
+        warmup=scored_start,
+        bars_per_year=settings.bars_per_year,
+        symbol=bars[0].symbol,
+    )
+
+    return LadderResult(
+        stages=stages,
+        buy_hold_sharpe=bh.metrics().sharpe,
+        scored_start=scored_start,
+        scored_end=scored_end,
+        folds=folds,
+        n_events=wf_events,
+    )
 
 
 def run_study(cfg: StudyConfig | None = None) -> StudyResult:
@@ -344,110 +550,17 @@ def run_study(cfg: StudyConfig | None = None) -> StudyResult:
     """
     cfg = cfg or StudyConfig()
     series = generate_price_series(cfg.synthetic, seed=cfg.seed)
-    all_bars = series.to_bars()
-
-    splitter = WalkForwardSplitter(
-        train_size=cfg.train_size, test_size=cfg.test_size, warmup=WARMUP
+    ladder = run_ladder(
+        series.to_bars(),
+        momentum_spec(cfg.lookback_grid),
+        cfg.settings(),
+        slippage=cfg.slippage(),
+        commission=cfg.commission(),
     )
-    folds = splitter.split(len(all_bars))
-    if not folds:
-        raise ValueError(
-            f"series of {len(all_bars)} bars is too short for train_size="
-            f"{cfg.train_size} and test_size={cfg.test_size}"
-        )
-
-    scored_start = folds[0].test_start
-    scored_end = folds[-1].test_end
-    bars = all_bars[:scored_end]
-
-    zero_slip: SlippageModel = ZeroSlippage()
-    zero_comm: CommissionModel = ZeroCommission()
-    real_slip = cfg.slippage()
-    real_comm = cfg.commission()
-
-    stage_specs = [
-        (
-            "Naive backtest",
-            "nothing -- look-ahead present, zero costs",
-            zero_slip,
-            zero_comm,
-            True,
-        ),
-        (
-            "+ point-in-time data",
-            "look-ahead bias (signal alignment and full-sample scaling)",
-            zero_slip,
-            zero_comm,
-            False,
-        ),
-        ("+ slippage", "free execution at the close", real_slip, zero_comm, False),
-        ("+ commissions", "zero brokerage fees", real_slip, real_comm, False),
-    ]
-
-    stages: list[StageResult] = []
-    for i, (name, removed, slip, comm, leak) in enumerate(stage_specs, start=1):
-        lookback, result = fit_in_sample(
-            bars,
-            cfg,
-            slippage=slip,
-            commission=comm,
-            warmup=scored_start,
-            look_ahead=leak,
-        )
-        stages.append(
-            StageResult(
-                index=i,
-                name=name,
-                assumption_removed=removed,
-                metrics=result.metrics(),
-                chosen_lookback=[lookback],
-                honest=False,
-            )
-        )
-
-    wf_metrics, wf_lookbacks, wf_events = run_walk_forward(
-        all_bars, cfg, folds, slippage=real_slip, commission=real_comm
-    )
-    stages.append(
-        StageResult(
-            index=5,
-            name="+ walk-forward OOS",
-            assumption_removed="a single in-sample parameter fit",
-            metrics=wf_metrics,
-            chosen_lookback=wf_lookbacks,
-            honest=True,
-        )
-    )
-
-    # Benchmark: buy and hold over the same scored window, paying the same
-    # frictions. A strategy that cannot beat this has not earned its fees.
-    from .strategy import BuyAndHoldStrategy
-
-    def bh_factory(events, data):
-        return BuyAndHoldStrategy(events, data, symbol=data.symbols[0])
-
-    from .engine import run_backtest as _rb
-
-    bh = _rb(
-        bars,
-        bh_factory,
-        slippage=real_slip,
-        commission=real_comm,
-        initial_capital=cfg.initial_capital,
-        rebalance_threshold=cfg.rebalance_threshold,
-        warmup=scored_start,
-        bars_per_year=cfg.synthetic.bars_per_year,
-    )
-
     return StudyResult(
-        stages=stages,
+        **{f.name: getattr(ladder, f.name) for f in fields(LadderResult)},
         oracle_sharpe=oracle_sharpe(series),
-        buy_hold_sharpe=bh.metrics().sharpe,
         config=cfg,
-        scored_start=scored_start,
-        scored_end=scored_end,
-        folds=folds,
-        n_events=wf_events,
     )
 
 
