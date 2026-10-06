@@ -6,8 +6,10 @@ way to distract from the fact that none of them are out of sample.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from math import sqrt
+from math import e, sqrt
+from statistics import NormalDist
 
 import numpy as np
 
@@ -192,3 +194,102 @@ def compute_metrics(
         slippage_cost=slippage_cost,
         annual_turnover=turnover,
     )
+
+
+# --------------------------------------------------------------------------
+# How much of a Sharpe ratio is luck: Bailey and Lopez de Prado (2012, 2014).
+# --------------------------------------------------------------------------
+
+#: Euler-Mascheroni constant, used in the expected maximum of N normals.
+_EULER_GAMMA = 0.5772156649015329
+_NORMAL = NormalDist()
+
+
+def _per_period_sharpe(returns: np.ndarray) -> float:
+    """Unannualised Sharpe, using the same degenerate-series guard as above."""
+    rets = np.asarray(returns, dtype=float)
+    if rets.size < 2:
+        return 0.0
+    mean, sd = float(rets.mean()), float(rets.std(ddof=1))
+    if not sd > 1e-12 * max(abs(mean), 1e-12):
+        return 0.0
+    return mean / sd
+
+
+def probabilistic_sharpe(returns: np.ndarray, benchmark: float = 0.0) -> float:
+    """Probability that the true Sharpe exceeds ``benchmark``.
+
+    The Probabilistic Sharpe Ratio (Bailey and Lopez de Prado, 2012). A
+    Sharpe estimated from ``T`` returns has a standard error that grows
+    with negative skew and fat tails, so the same point estimate is less
+    convincing for a strategy that sells crash insurance:
+
+        PSR = Phi((SR - SR*) * sqrt(T - 1) / sqrt(1 - g3 * SR + (g4 - 1) / 4 * SR^2))
+
+    Args:
+        returns: Per-bar returns.
+        benchmark: The Sharpe to beat, **per bar** (not annualised).
+
+    Returns:
+        A probability in ``[0, 1]``; 0.5 when there is too little data.
+    """
+    rets = np.asarray(returns, dtype=float)
+    n = rets.size
+    if n < 3:
+        return 0.5
+    sr = _per_period_sharpe(rets)
+    centred = rets - rets.mean()
+    sd = float(rets.std(ddof=0))
+    if sd == 0.0:
+        return 0.5
+    skew = float((centred**3).mean() / sd**3)
+    kurt = float((centred**4).mean() / sd**4)
+    denom = 1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr**2
+    if denom <= 0.0:
+        return 0.5
+    return float(_NORMAL.cdf((sr - benchmark) * sqrt(n - 1) / sqrt(denom)))
+
+
+def expected_max_sharpe(n_trials: int, trial_variance: float) -> float:
+    """Expected largest of ``n_trials`` Sharpe ratios whose true value is zero.
+
+    If you try ``N`` settings of a strategy with no edge, the best of them
+    still shows a positive Sharpe by luck alone. Its expected size is
+
+        sqrt(V) * ((1 - g) * Phi^-1(1 - 1/N) + g * Phi^-1(1 - 1/(N e)))
+
+    where ``V`` is the variance of the Sharpe ratios across the trials and
+    ``g`` the Euler-Mascheroni constant. Per bar, like ``trial_variance``.
+    """
+    if n_trials < 2 or trial_variance <= 0.0:
+        return 0.0
+    return sqrt(trial_variance) * (
+        (1.0 - _EULER_GAMMA) * _NORMAL.inv_cdf(1.0 - 1.0 / n_trials)
+        + _EULER_GAMMA * _NORMAL.inv_cdf(1.0 - 1.0 / (n_trials * e))
+    )
+
+
+def deflated_sharpe(
+    returns: np.ndarray, trial_sharpes: Sequence[float], bars_per_year: int = 252
+) -> float:
+    """Probability that a selected strategy's Sharpe is not just the luckiest trial.
+
+    The Deflated Sharpe Ratio (Bailey and Lopez de Prado, 2014) is the
+    :func:`probabilistic_sharpe` of the chosen strategy measured against the
+    Sharpe that the best of all the trials would show with no edge at all.
+    It is the right test for an in-sample fit: picking the best of a grid
+    is exactly the selection it corrects for.
+
+    Args:
+        returns: Per-bar returns of the selected strategy.
+        trial_sharpes: **Annualised** Sharpe of every setting tried, the
+            selected one included.
+        bars_per_year: Annualisation factor used for ``trial_sharpes``.
+
+    Returns:
+        A probability in ``[0, 1]``. With a single trial it equals the PSR
+        against zero.
+    """
+    per_bar = np.asarray(trial_sharpes, dtype=float) / sqrt(bars_per_year)
+    variance = float(per_bar.var(ddof=1)) if per_bar.size > 1 else 0.0
+    return probabilistic_sharpe(returns, expected_max_sharpe(per_bar.size, variance))

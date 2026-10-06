@@ -9,6 +9,7 @@ _HEADERS = (
     "#",
     "Stage",
     "Sharpe",
+    "P(edge)",
     "Total return",
     "Ann. return",
     "Max DD",
@@ -28,6 +29,17 @@ def _fmt_params(chosen: list[Params]) -> str:
     return "/".join(str(v) for v in values)
 
 
+def _fmt_probability(p: float) -> str:
+    """Render a probability as a percentage; extremes are capped, not rounded."""
+    if p != p:  # NaN
+        return "-"
+    if p > 0.999:
+        return ">99.9%"
+    if p < 0.001:
+        return "<0.1%"
+    return f"{p * 100:.1f}%"
+
+
 def _rows(result: LadderResult) -> list[tuple[str, ...]]:
     """Build the table body."""
     rows: list[tuple[str, ...]] = []
@@ -38,6 +50,7 @@ def _rows(result: LadderResult) -> list[tuple[str, ...]]:
                 str(stage.index),
                 stage.name,
                 f"{m.sharpe:.2f}",
+                _fmt_probability(stage.p_edge),
                 f"{m.total_return * 100:+.1f}%",
                 f"{m.annual_return * 100:+.1f}%",
                 f"{m.max_drawdown * 100:.1f}%",
@@ -127,6 +140,10 @@ def render_context(result: StudyResult) -> str:
             f"({(1 - honest / naive) * 100:.0f}% of the naive figure)"
             if naive != 0
             else "",
+            "  P(edge) is the Deflated Sharpe Ratio for the in-sample rungs (it\n"
+            "  discounts for picking the best lookback) and the Probabilistic Sharpe\n"
+            "  Ratio for walk-forward. The naive rung's near-certain P(edge) is the\n"
+            "  look-ahead talking: significance on a leaky backtest measures the leak.",
             f"  Sharpe fell monotonically at every stage: "
             f"{'yes' if result.is_monotone else 'NO - reported as measured'}",
         ]
