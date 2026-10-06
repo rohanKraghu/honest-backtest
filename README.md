@@ -137,7 +137,9 @@ python run_experiment.py --seeds 1         # headline table only, ~2 seconds
 python run_experiment.py --seed 42         # a different price path
 python run_experiment.py --markdown        # emit the table in Markdown
 python run_experiment.py --html study.html # also write the charts as a web page
-pytest                                     # 178 tests, ~6 seconds
+python run_experiment.py --json study.json # also write every number as JSON
+python run_experiment.py --config examples/study.json   # settings from a file
+pytest                                     # 251 tests, ~12 seconds
 ```
 
 Results are deterministic: the same seed reproduces the same numbers to the last
@@ -202,6 +204,92 @@ approximate t-stat (Sharpe × √years). The impact model's volatility is
 estimated from the first training window only, which ends before any scored
 bar. Costs, windows and capital are all flags; `honest-backtest audit --help`
 lists them.
+
+### More than one out-of-sample path
+
+Walk-forward produces one out-of-sample path, so its Sharpe is a single draw.
+`--cpcv N,K` adds combinatorial purged cross-validation (López de Prado,
+*Advances in Financial Machine Learning*, ch. 12) after the ladder, and reports
+how that Sharpe is spread across paths:
+
+```bash
+honest-backtest audit --data examples/sample_prices.csv \
+    --strategy examples/sma_crossover.py --cpcv 6,2
+```
+
+```
+Combinatorial purged cross-validation (6 groups, 2 held out per split; purge 200, embargo 0 bars):
+  15 splits, 5 paths over the same 2016 bars, every bar tested 5 times
+  Path Sharpe  median  -0.06   quartiles -0.09 to 0.03   range -0.21 to 0.13
+  Paths below zero: 3 of 5 (60%)
+  Walk-forward's one path scored -0.12; the spread above is how far
+  one out-of-sample path can land from another with different training data.
+```
+
+How it works, and what it guarantees:
+
+- **The window is the ladder's.** The scored window is cut into `N`
+  contiguous groups and every combination of `K` groups is held out once,
+  giving `C(N, K)` splits. Every rung and every path covers the same bars,
+  and none of them the window the cost model was calibrated on.
+- **Training never sees a test bar.** The training set is every other bar,
+  less a **purge** on both sides of each test block (`--cpcv-purge`, default
+  the strategy's warm-up, since that is how far a lookback reaches across a
+  boundary) and an **embargo** after it (`--cpcv-embargo`, default 0).
+  Training segments are replayed one at a time, each warming up on its own
+  first bars, so no test, purged or embargoed bar reaches a training run
+  even as indicator history. The setting with the best pooled Sharpe over
+  the segments wins, as in every other fit.
+- **Testing warms up on the past only.** A held-out group is scored with the
+  bars just before it replayed unscored, exactly as a walk-forward fold is:
+  they are strictly earlier, a live trader would have had them, and nothing
+  after the group is replayed.
+- **Paths rebuild the whole window.** Every bar is tested `C(N-1, K-1)` times,
+  and the tests are assigned to that many paths, each a complete walk through
+  the window stitched on returns. The tests in `test_cpcv_splits.py` and
+  `test_cpcv.py` pin each of these.
+
+The paths are not independent draws: they share bars, and their training
+sets overlap heavily, so the spread is a picture of how much one
+out-of-sample number depends on which data it was trained on, not a
+confidence interval. With `N = 6, K = 2` there are only five paths; more
+groups give more paths but shorter, more heavily purged training segments,
+and a purge that leaves no segment long enough to warm up is refused. Unlike
+walk-forward, CPCV trains on bars after the ones it tests; the purge and
+embargo address information that leaks across the boundary, not a market
+that changes, which is why walk-forward stays the headline and this is an
+extra. The HTML report (`--html`) draws the paths as dots against the
+walk-forward number. In code, `CombinatorialPurgedSplitter` produces the
+splits and paths and `run_cpcv` runs any `StrategySpec` through them.
+
+### Settings files and JSON results
+
+Every flag of both commands can live in a file, and every number in the
+report can be written out for another program:
+
+```bash
+honest-backtest audit --config examples/audit.yaml --json audit.json
+python run_experiment.py --config examples/study.json --seeds 1
+```
+
+A config file is a flat mapping whose keys are the long option names, with
+dashes or underscores (`train_size: 504`, `cpcv: [6, 2]`, `no_leak_check:
+true`). Each value goes through the same conversion and checks as the flag, so
+an unknown key or a value the flag would refuse is an error, not a silent
+default. Flags on the command line override the file, and relative paths in
+the file resolve against the file's own directory. JSON configs need nothing
+extra; YAML needs PyYAML (`pip install pyyaml`, or `pip install -e ".[yaml]"`),
+and without it a `.yaml` file is refused with that instruction.
+`examples/audit.yaml` is the audit above with comments; `examples/study.json`
+is the headline study.
+
+`--json PATH` writes strict JSON (undefined values are `null`, never `NaN`):
+the settings, every rung's metrics, P(edge) and chosen parameters, the folds,
+the cost models and the costs paid, buy and hold, and either the oracle and
+seed sweep (study) or the look-ahead check, t-stat and cross-validation
+distribution (audit). The tests read it back and find each number in the
+printed report, and check that a config file and the same flags write
+byte-identical JSON.
 
 ## Architecture
 
@@ -284,12 +372,14 @@ src/honest_backtest/
 ├── portfolio.py     Cash, positions, equity curve, order sizing, trade blotter
 ├── engine.py        The event loop
 ├── metrics.py       Sharpe, drawdown, returns, turnover
-├── walkforward.py   Rolling / anchored train-test splits
+├── walkforward.py   Rolling / anchored train-test splits; combinatorial purged CV splits
 ├── spec.py          StrategySpec: builder + parameter grid + warm-up
-├── experiments.py   The generic ladder, and the five-stage synthetic study
+├── experiments.py   The generic ladder, the five-stage synthetic study, CPCV runs
 ├── csvdata.py       Real price files into bars, with order and adjustment checks
 ├── audit.py         The ladder on your own strategy and data
 ├── report.py        Table rendering
+├── config.py        --config: JSON or YAML settings, checked like flags
+├── export.py        --json: every number in the report, machine-readable
 └── cli.py           `honest-backtest` and `honest-backtest audit`
 ```
 
@@ -373,7 +463,7 @@ one. The engine itself takes `fill_timing` on `run_backtest` and
 
 ## Tests
 
-178 tests, covering the things that would invalidate the result if they were
+251 tests, covering the things that would invalidate the result if they were
 wrong rather than the things that are easy to test:
 
 ```bash
@@ -397,6 +487,10 @@ pytest
 | `test_deflated_sharpe.py` | PSR, expected maximum Sharpe and DSR against their definitions: more trials and negative skew both lower the probability, one trial makes DSR equal PSR, and every rung of a study reports one. |
 | `test_leaks.py` | The look-ahead check passes honest strategies and catches the leaky twin, a strategy reading the handler's private list, one refused by the handler, and state shared between runs; random strategies are flagged as uncheckable; a leaky audit opens with a warning and exits non-zero. |
 | `test_html_report.py` | The HTML report is self-contained (no scripts, nothing fetched), carries every rung and reference, escapes names, and is written by `--html`; every rung keeps returns for exactly the scored window. |
+| `test_cpcv_splits.py` | Combinatorial purged splits, over a spread of group counts, purges and embargoes: no training bar inside a test block or within its purge or embargo, nothing else dropped, every bar tested exactly `C(N-1, K-1)` times, and every path walking the whole window using each test once. |
+| `test_cpcv.py` | The CPCV runner replays only each split's training segments and each group with the bars before it; rewriting every bar outside a split's training set cannot change its fit; path Sharpes come from the stitched paths; `--cpcv` leaves every rung unchanged and reports the spread in text and HTML. |
+| `test_config.py` | A JSON or YAML config reproduces the same flags' output exactly; flags override the file; paths resolve against the file; unknown keys and bad values are refused like bad flags; a YAML file without PyYAML asks for it. |
+| `test_export.py` | `--json` parses as strict JSON and every rung, reference, sweep row, leak check and CPCV statistic matches the printed report; a config and the same flags write byte-identical JSON. |
 
 Two real bugs were caught by these tests while writing them, which is the
 argument for having them:
