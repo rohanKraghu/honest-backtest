@@ -152,3 +152,25 @@ def test_the_shipped_example_audits(capsys):
     ]
     assert main(argv) == 0
     assert "moving-average crossover" in capsys.readouterr().out
+
+
+def test_a_fast_audit_prints_the_same_report(capsys):
+    """--fast only changes how long the audit takes."""
+    argv = [
+        "audit",
+        "--data",
+        str(EXAMPLES / "sample_prices.csv"),
+        "--strategy",
+        str(EXAMPLES / "sma_crossover.py"),
+        "--permanent-impact",
+        "0.3",
+    ]
+    main(argv)
+    slow = capsys.readouterr().out.splitlines()
+    main(argv + ["--fast"])
+    fast = capsys.readouterr().out.splitlines()
+
+    def keep(lines):
+        return [line for line in lines if not line.startswith("Completed in")]
+
+    assert keep(fast) == keep(slow)
