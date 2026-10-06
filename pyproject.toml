@@ -1,26 +1,73 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "honest-backtest"
-version = "0.1.0"
+# "honest-backtest" is taken on PyPI by an unrelated project. The import name
+# (honest_backtest) and the command (honest-backtest) are unaffected.
+name = "honest-backtester"
+dynamic = ["version"]
 description = "An event-driven backtester built to demonstrate why backtests lie."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-dependencies = ["numpy==2.2.6"]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "rohanKraghu" }]
+keywords = [
+    "backtesting",
+    "quantitative-finance",
+    "trading",
+    "look-ahead-bias",
+    "walk-forward",
+    "deflated-sharpe-ratio",
+    "paper-trading",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
+# A range, not a pin: the suite and the headline numbers are identical on
+# numpy 1.24 and 2.3. requirements.txt pins the exact version for reproducing
+# the README.
+dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
 # YAML study and audit configs (--config file.yaml). JSON configs need nothing.
 yaml = ["pyyaml>=6"]
-dev = ["pytest==8.3.5", "pyyaml==6.0.3"]
+dev = ["pytest==8.3.5", "pyyaml==6.0.3", "ruff", "build", "twine"]
+# MkDocs 2 drops plugins, which the site relies on.
+docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/rohanKraghu/honest-backtest"
+Documentation = "https://rohankraghu.github.io/honest-backtest/"
+Source = "https://github.com/rohanKraghu/honest-backtest"
+Issues = "https://github.com/rohanKraghu/honest-backtest/issues"
+Changelog = "https://github.com/rohanKraghu/honest-backtest/blob/main/CHANGELOG.md"
 
 [project.scripts]
 honest-backtest = "honest_backtest.cli:main"
 
+[tool.setuptools.dynamic]
+version = { attr = "honest_backtest.__version__" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+honest_backtest = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

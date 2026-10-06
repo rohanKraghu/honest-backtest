@@ -6,7 +6,7 @@ from queue import Queue
 
 import pytest
 
-from honest_backtest.data import HistoricBarDataHandler, bars_from_series
+from honest_backtest.data import HistoricBarDataHandler
 from honest_backtest.engine import Backtest, run_backtest
 from honest_backtest.events import (
     EventType,
@@ -64,14 +64,13 @@ def test_warmup_excludes_leading_bars_from_scoring(bars):
     assert result.metrics().n_periods == len(bars) - 100
 
 
-def test_limit_orders_are_refused_rather_than_silently_treated_as_market():
-    events: Queue = Queue()
-    data = HistoricBarDataHandler(events, bars_from_series([100.0, 101.0]))
-    data.update_bars()
-    execution = SimulatedExecutionHandler(events, data)
-    order = OrderEvent("SYNTH", 0, 100.0, "BUY", order_type="LMT")
-    with pytest.raises(NotImplementedError):
-        execution.execute_order(order)
+def test_a_limit_order_without_a_limit_price_is_refused_not_treated_as_market():
+    with pytest.raises(ValueError):
+        OrderEvent("SYNTH", 0, 100.0, "BUY", order_type="LMT")
+    with pytest.raises(ValueError):
+        OrderEvent("SYNTH", 0, 100.0, "BUY", limit_price=99.0)
+    with pytest.raises(ValueError):
+        OrderEvent("SYNTH", 0, 100.0, "BUY", order_type="STOP")
 
 
 def test_event_constructors_validate_their_inputs():

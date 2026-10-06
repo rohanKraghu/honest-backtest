@@ -31,7 +31,11 @@ from .experiments import (
 from .html_report import ReportContext, render_html
 from .leaks import LeakReport, detect_look_ahead
 from .report import render_costs, render_cpcv, render_markdown_table, render_table
-from .slippage import SlippageModel, SpreadPlusImpactSlippage
+from .slippage import (
+    PermanentImpactSlippage,
+    SlippageModel,
+    SpreadPlusImpactSlippage,
+)
 from .spec import StrategySpec, param_names
 from .walkforward import CombinatorialPurgedSplitter
 
@@ -109,6 +113,10 @@ class AuditConfig:
             equity brokers.
         commission_per_share: Per-share fee when ``commission_bps`` is unset.
         commission_minimum: Minimum per-share-model fee per order.
+        permanent_impact: Coefficient of the decaying permanent impact
+            (see :class:`~honest_backtest.slippage.PermanentImpactSlippage`);
+            0 keeps the temporary-only model.
+        impact_half_life: Bars for permanent impact to halve.
         check_leaks: Before running the ladder, replay the strategy with the
             future replaced at several points and confirm no past signal
             changes (see :mod:`honest_backtest.leaks`).
@@ -129,6 +137,8 @@ class AuditConfig:
     commission_per_share: float = 0.005
     commission_minimum: float = 1.0
     check_leaks: bool = True
+    permanent_impact: float = 0.0
+    impact_half_life: float = 5.0
     cpcv: tuple[int, int] | None = None
     cpcv_purge: int | None = None
     cpcv_embargo: int = 0
@@ -153,10 +163,19 @@ class AuditConfig:
 
     def slippage(self, bars: Sequence[Bar]) -> SlippageModel:
         """Build the impact model, calibrated on the first training window."""
+        vol = estimate_bar_volatility(bars[: self.settings.train_size])
+        if self.permanent_impact > 0:
+            return PermanentImpactSlippage(
+                half_spread_bps=self.half_spread_bps,
+                impact_coefficient=self.impact_coefficient,
+                bar_volatility=vol,
+                permanent_coefficient=self.permanent_impact,
+                half_life_bars=self.impact_half_life,
+            )
         return SpreadPlusImpactSlippage(
             half_spread_bps=self.half_spread_bps,
             impact_coefficient=self.impact_coefficient,
-            bar_volatility=estimate_bar_volatility(bars[: self.settings.train_size]),
+            bar_volatility=vol,
         )
 
 
@@ -249,6 +268,8 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
         f"(train {cfg.train_size}, test {cfg.test_size}, non-overlapping)",
         f"  settings tried      {len(result.spec.grid)} per fit",
         f"  next-bar fills      {cfg.fill_timing}",
+        f"  liquidity, carry    "
+        f"{cfg.frictions.describe() if cfg.frictions is not None else 'none'}",
         f"  look-ahead check    {leak_line}",
         "",
         render_table(ladder, param_header=param_names(result.spec)),
@@ -336,6 +357,10 @@ def render_audit_html(result: AuditResult) -> str:
             ),
             ("Settings tried", f"{len(result.spec.grid)} per fit"),
             ("Next-bar fills", cfg.fill_timing),
+            (
+                "Liquidity and carry",
+                cfg.frictions.describe() if cfg.frictions is not None else "none",
+            ),
             ("Look-ahead check", "skipped" if leaks is None else leaks.summary()),
         ],
         references=[("Buy and hold", ladder.buy_hold_sharpe)],
