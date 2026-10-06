@@ -103,8 +103,10 @@ class OrderEvent(Event):
         timestamp: Bar at which the order is submitted.
         quantity: Absolute number of units (always non-negative).
         direction: ``"BUY"`` or ``"SELL"``.
-        order_type: Only ``"MKT"`` is simulated; limit orders would require
-            modelling queue position, which this project does not claim to do.
+        order_type: ``"MKT"`` (market) or ``"LMT"`` (limit).
+        limit_price: The worst price a limit order accepts; required for
+            ``"LMT"`` and forbidden otherwise.
+        expiry_bars: Bars a limit order rests before it is cancelled.
     """
 
     symbol: str
@@ -112,6 +114,8 @@ class OrderEvent(Event):
     quantity: float
     direction: Direction
     order_type: str = "MKT"
+    limit_price: float | None = None
+    expiry_bars: int = 1
 
     def __init__(
         self,
@@ -120,22 +124,48 @@ class OrderEvent(Event):
         quantity: float,
         direction: Direction,
         order_type: str = "MKT",
+        limit_price: float | None = None,
+        expiry_bars: int = 1,
     ) -> None:
         if quantity < 0:
             raise ValueError("OrderEvent.quantity must be non-negative; use direction")
         if direction not in ("BUY", "SELL"):
             raise ValueError(f"unknown direction {direction!r}")
+        if order_type not in ("MKT", "LMT"):
+            raise ValueError(f"unknown order type {order_type!r}")
+        if (order_type == "LMT") != (limit_price is not None):
+            raise ValueError("a limit price is required for LMT orders and only for them")
+        if limit_price is not None and not limit_price > 0:
+            raise ValueError("limit_price must be positive")
+        if expiry_bars < 1:
+            raise ValueError("expiry_bars must be at least 1")
         object.__setattr__(self, "type", EventType.ORDER)
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "timestamp", timestamp)
         object.__setattr__(self, "quantity", float(quantity))
         object.__setattr__(self, "direction", direction)
         object.__setattr__(self, "order_type", order_type)
+        object.__setattr__(
+            self, "limit_price", None if limit_price is None else float(limit_price)
+        )
+        object.__setattr__(self, "expiry_bars", int(expiry_bars))
 
     @property
     def signed_quantity(self) -> float:
         """Quantity with sign applied (positive for a buy)."""
         return self.quantity if self.direction == "BUY" else -self.quantity
+
+    def with_quantity(self, quantity: float) -> OrderEvent:
+        """The same order for a different quantity, e.g. one partial fill."""
+        return OrderEvent(
+            self.symbol,
+            self.timestamp,
+            quantity,
+            self.direction,
+            self.order_type,
+            self.limit_price,
+            self.expiry_bars,
+        )
 
 
 @dataclass(frozen=True)

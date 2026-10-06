@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported Python with the oldest supported numpy, and
+          # the newest of both, so the dependency range stays honest.
+          - python: "3.10"
+            numpy: "numpy==1.24.4"
+          - python: "3.11"
+            numpy: "-r requirements.txt"
+          - python: "3.12"
+            numpy: "numpy"
+          - python: "3.13"
+            numpy: "numpy"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # PyYAML is optional for the package but the YAML --config tests need it.
+      - run: python -m pip install ${{ matrix.numpy }} pytest==8.3.5 pyyaml==6.0.3
+      - run: python -m pytest
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: python -m twine check --strict dist/*
+      - name: Install the wheel and run every command
+        run: |
+          python -m venv /tmp/wheel
+          /tmp/wheel/bin/pip install "$(ls dist/*.whl)[yaml]"
+          cd /tmp
+          /tmp/wheel/bin/honest-backtest --seeds 1 --bars 800 --train-size 252 --test-size 252
+          /tmp/wheel/bin/honest-backtest audit --data "$GITHUB_WORKSPACE/examples/sample_prices.csv" --strategy momentum --fast
+          /tmp/wheel/bin/honest-backtest paper --data "$GITHUB_WORKSPACE/examples/sample_prices.csv" --strategy momentum --live-from 2024-08-01 --once
+          /tmp/wheel/bin/honest-backtest audit --config "$GITHUB_WORKSPACE/examples/audit.yaml" --fast --json /tmp/audit.json
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[docs]"
+      - run: mkdocs build --strict
