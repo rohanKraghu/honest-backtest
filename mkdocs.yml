@@ -30,6 +30,8 @@ nav:
   - Getting started: getting-started.md
   - Guides:
       - Auditing a strategy: guides/audit.md
+      - Cross-validation paths: guides/cross-validation.md
+      - Settings files and JSON: guides/config-and-json.md
       - Writing a strategy: guides/strategies.md
       - Costs, liquidity and carry: guides/costs.md
       - Paper trading: guides/paper-trading.md

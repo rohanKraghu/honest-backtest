@@ -26,7 +26,7 @@ from html import escape
 
 import numpy as np
 
-from .experiments import LadderResult, StudyResult
+from .experiments import CPCVResult, LadderResult, StudyResult
 from .report import _fmt_params, _fmt_probability
 
 #: Series colours, by rung. The last rung (out of sample) always gets the
@@ -138,6 +138,8 @@ class ReportContext:
         warning: Shown prominently at the top when set.
         param_header: What the chosen-parameters column is called.
         dates: Optional date label for each scored bar, for the x axis.
+        cpcv: Optional combinatorial cross-validation result; when set the
+            page gains a section showing the spread of path Sharpes.
     """
 
     title: str
@@ -148,6 +150,7 @@ class ReportContext:
     warning: str | None = None
     param_header: str = "Params"
     dates: Sequence[str] | None = field(default=None)
+    cpcv: CPCVResult | None = None
 
 
 def _nice_step(span: float, target: int = 5) -> float:
@@ -384,6 +387,81 @@ def costs_svg(ladder: LadderResult) -> str:
     return "".join(parts)
 
 
+def cpcv_svg(cpcv: CPCVResult, walk_forward: float) -> str:
+    """Draw every path's Sharpe as a dot, over its quartile box and median."""
+    sharpes = [float(v) for v in cpcv.path_sharpes]
+    values = [0.0, walk_forward, *sharpes]
+    lo, hi = min(values), max(values)
+    pad = 0.08 * (hi - lo or 1.0)
+    lo, hi = lo - pad, hi + pad
+    width, height = 900, 170
+    left, right, top, bottom = 16, 16, 28, 34
+    mid = top + (height - top - bottom) / 2
+
+    def x(v: float) -> float:
+        return left + (v - lo) / (hi - lo) * (width - left - right)
+
+    parts = [
+        f'<svg viewBox="0 0 {width} {height}" role="img" '
+        'aria-label="Out-of-sample Sharpe of every cross-validation path">'
+    ]
+    step = _nice_step(hi - lo)
+    tick = math.ceil(lo / step) * step
+    while tick <= hi + 1e-12:
+        parts.append(
+            f'<line class="axis" x1="{x(tick):.1f}" x2="{x(tick):.1f}" '
+            f'y1="{top}" y2="{height - bottom}"/>'
+            f'<text class="muted" x="{x(tick):.1f}" y="{height - bottom + 18}" '
+            f'text-anchor="middle">{_fmt_num(tick)}</text>'
+        )
+        tick += step
+    parts.append(
+        f'<line class="zero" x1="{x(0):.1f}" x2="{x(0):.1f}" '
+        f'y1="{top}" y2="{height - bottom}"/>'
+    )
+    q1, q3 = cpcv.quartiles
+    parts.append(
+        f'<rect class="total" opacity="0.25" x="{x(q1):.1f}" y="{mid - 22:.1f}" '
+        f'width="{max(x(q3) - x(q1), 1.0):.1f}" height="44" rx="3"/>'
+        f'<line class="line s1" x1="{x(cpcv.median):.1f}" x2="{x(cpcv.median):.1f}" '
+        f'y1="{mid - 26:.1f}" y2="{mid + 26:.1f}" stroke-width="2.4"/>'
+        f'<text x="{x(cpcv.median):.1f}" y="{top - 8}" text-anchor="middle">'
+        f"median {cpcv.median:.2f}</text>"
+    )
+    for i, v in enumerate(sharpes):
+        dy = ((i * 7) % 5 - 2) * 6
+        parts.append(
+            f'<circle class="total" cx="{x(v):.1f}" cy="{mid + dy:.1f}" r="4.5">'
+            f"<title>path {i + 1}: {v:.2f}</title></circle>"
+        )
+    parts.append(
+        f'<line class="line honest" x1="{x(walk_forward):.1f}" '
+        f'x2="{x(walk_forward):.1f}" y1="{mid - 30:.1f}" y2="{mid + 30:.1f}" '
+        'stroke-dasharray="4 3"/>'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _cpcv_section(cpcv: CPCVResult | None, walk_forward: float) -> str:
+    if cpcv is None:
+        return ""
+    q1, q3 = cpcv.quartiles
+    return f"""
+<h2>Out of sample, across {cpcv.n_paths} paths</h2>
+<p class="note">Combinatorial purged cross-validation: {cpcv.n_groups} groups,
+{cpcv.n_test_groups} held out per split, purge {cpcv.purge} and embargo
+{cpcv.embargo} bars. Each dot is one complete out-of-sample path over the same
+bars as the ladder; the box spans the quartiles ({q1:.2f} to {q3:.2f}). The
+dashed line is walk-forward's single path ({walk_forward:.2f}).
+{cpcv.n_below_zero} of {cpcv.n_paths} paths
+({cpcv.share_below_zero * 100:.0f}%) are below zero.</p>
+<div class="panel">{cpcv_svg(cpcv, walk_forward)}
+<div class="legend"><span style="color: var(--total)">Path Sharpe</span>
+<span style="color: var(--honest)">Walk-forward</span></div></div>
+"""
+
+
 def _table(ladder: LadderResult, param_header: str) -> str:
     head = [
         "#",
@@ -485,6 +563,7 @@ scored window, in account currency.</p>
 
 <h2>The ladder</h2>
 {_table(ladder, context.param_header)}
+{_cpcv_section(context.cpcv, last.metrics.sharpe)}
 
 <h2>Reading it</h2>
 <ul class="notes">{notes}</ul>

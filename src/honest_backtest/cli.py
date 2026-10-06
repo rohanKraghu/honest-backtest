@@ -10,6 +10,10 @@ and ``paper`` trades that strategy on paper as new rows reach the file::
 
     honest-backtest audit --data prices.csv --strategy my_strategy.py
     honest-backtest paper --data prices.csv --strategy my_strategy.py
+
+The study and ``audit`` take ``--config FILE`` to read their settings from a
+JSON or YAML file (see :mod:`honest_backtest.config`); flags on the command
+line override it.
 """
 
 from __future__ import annotations
@@ -21,14 +25,17 @@ from dataclasses import replace
 from pathlib import Path
 
 from .audit import (
+    BUILT_IN_STRATEGIES,
     AuditConfig,
     load_spec,
     render_audit_html,
     render_audit_report,
     run_audit,
 )
+from .config import add_config_option, parse_args_with_config
 from .csvdata import has_real_opens, load_csv_bars
 from .experiments import LadderSettings, StudyConfig, run_seed_sweep, run_study
+from .export import audit_dict, study_dict, to_json
 from .financing import Financing
 from .frictions import MarketFrictions
 from .html_report import study_html
@@ -90,7 +97,28 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="also write a self-contained HTML report with charts to PATH",
     )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="also write every number in the report as JSON to PATH",
+    )
+    add_config_option(parser)
     return parser
+
+
+def parse_cpcv(text: str) -> tuple[int, int]:
+    """Parse ``--cpcv N,K`` into ``(n_groups, n_test_groups)``."""
+    try:
+        n_groups, n_test_groups = (int(part) for part in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected N,K such as 6,2 (groups, groups held out); got {text!r}"
+        ) from None
+    if not 1 <= n_test_groups < n_groups:
+        raise argparse.ArgumentTypeError("need 1 <= K < N")
+    return n_groups, n_test_groups
 
 
 def build_audit_parser() -> argparse.ArgumentParser:
@@ -104,12 +132,14 @@ def build_audit_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--data", required=True, help="CSV with a date and close column, oldest first"
+        "--data",
+        default=None,
+        help="CSV with a date and close column, oldest first (required)",
     )
     parser.add_argument(
         "--strategy",
-        required=True,
-        help="'momentum', a file defining SPEC, or file.py:NAME",
+        default=None,
+        help="'momentum', a file defining SPEC, or file.py:NAME (required)",
     )
     parser.add_argument("--symbol", default=None, help="instrument name for the report")
     parser.add_argument(
@@ -201,6 +231,31 @@ def build_audit_parser() -> argparse.ArgumentParser:
         help="skip replaying the strategy with altered futures to look for look-ahead",
     )
     parser.add_argument(
+        "--cpcv",
+        type=parse_cpcv,
+        default=None,
+        metavar="N,K",
+        help=(
+            "also run combinatorial purged cross-validation with N groups and K "
+            "held out per split, and report the spread of out-of-sample Sharpe"
+        ),
+    )
+    parser.add_argument(
+        "--cpcv-purge",
+        type=int,
+        default=None,
+        metavar="BARS",
+        help="bars purged from training on each side of a test block "
+        "(default: the strategy's warm-up)",
+    )
+    parser.add_argument(
+        "--cpcv-embargo",
+        type=int,
+        default=0,
+        metavar="BARS",
+        help="extra bars dropped from training after a test block",
+    )
+    parser.add_argument(
         "--fast",
         action="store_true",
         help="replay each setting's signals once instead of rerunning the event loop "
@@ -214,6 +269,14 @@ def build_audit_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="also write a self-contained HTML report with charts to PATH",
     )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="also write every number in the report as JSON to PATH",
+    )
+    add_config_option(parser)
     return parser
 
 
@@ -240,7 +303,11 @@ def _frictions(args: argparse.Namespace) -> MarketFrictions | None:
 
 def audit_main(argv: list[str]) -> int:
     """Run ``honest-backtest audit`` and print the report."""
-    args = build_audit_parser().parse_args(argv)
+    parser = build_audit_parser()
+    args = parse_args_with_config(parser, argv, keep_names=BUILT_IN_STRATEGIES)
+    for name in ("data", "strategy"):
+        if getattr(args, name) is None:
+            parser.error(f"--{name} is required, on the command line or in --config")
     bars = load_csv_bars(
         args.data,
         symbol=args.symbol,
@@ -269,6 +336,9 @@ def audit_main(argv: list[str]) -> int:
         check_leaks=not args.no_leak_check,
         permanent_impact=args.permanent_impact,
         impact_half_life=args.impact_half_life,
+        cpcv=args.cpcv,
+        cpcv_purge=args.cpcv_purge,
+        cpcv_embargo=args.cpcv_embargo,
     )
     started = time.perf_counter()
     result = run_audit(bars, spec, config)
@@ -276,6 +346,9 @@ def audit_main(argv: list[str]) -> int:
     if args.html is not None:
         args.html.write_text(render_audit_html(result), encoding="utf-8")
         print(f"\nHTML report written to {args.html}")
+    if args.json is not None:
+        args.json.write_text(to_json(audit_dict(result)), encoding="utf-8")
+        print(f"\nJSON results written to {args.json}")
     print()
     print(f"Completed in {time.perf_counter() - started:.1f}s.")
     # A leak makes every number above meaningless, so fail loudly for CI.
@@ -296,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
         return audit_main(argv[1:])
     if argv and argv[0] == "paper":
         return paper_main(argv[1:])
-    args = build_parser().parse_args(argv)
+    args = parse_args_with_config(build_parser(), argv)
 
     config = StudyConfig(
         synthetic=SyntheticConfig(n_bars=args.bars),
@@ -342,6 +415,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.html is not None:
         args.html.write_text(study_html(result), encoding="utf-8")
         print(f"\nHTML report written to {args.html}")
+
+    if args.json is not None:
+        args.json.write_text(to_json(study_dict(result, sweep)), encoding="utf-8")
+        print(f"\nJSON results written to {args.json}")
 
     return 0
 
