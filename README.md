@@ -344,13 +344,15 @@ src/honest_backtest/
 ├── engine.py        The event loop
 ├── fast.py          Signal replay that reproduces the engine exactly, for sweeps
 ├── live.py          Live feeds, the live handler and the paper trader
-├── metrics.py       Sharpe, drawdown, returns, turnover
+├── metrics.py       Sharpe, drawdown, returns, turnover; Probabilistic and Deflated Sharpe
 ├── walkforward.py   Rolling / anchored train-test splits
 ├── spec.py          StrategySpec: builder + parameter grid + warm-up
 ├── experiments.py   The generic ladder, and the five-stage synthetic study
 ├── csvdata.py       Real price files into bars, with order and adjustment checks
 ├── audit.py         The ladder on your own strategy and data
+├── leaks.py         The look-ahead check: replace the future, compare the past
 ├── report.py        Table rendering
+├── html_report.py   The self-contained HTML report
 ├── paper_cli.py     `honest-backtest paper`
 └── cli.py           `honest-backtest` and `honest-backtest audit`
 ```
@@ -587,10 +589,51 @@ captured, which is what makes stage 5 cover exactly the same bars as stages 1–
 - That these frictions are calibrated to any particular venue. They are plausible
   equity-like defaults and they are all constructor arguments.
 - That a positive walk-forward result would have been sufficient. It would have
-  been necessary, not sufficient — with 12 paths and one strategy, multiple
-  testing is still lurking.
+  been necessary, not sufficient. P(edge) deflates each in-sample rung for the
+  lookbacks that rung tried, but it cannot count the strategies, features and
+  ideas tried before this one was written down, so multiple testing is still
+  lurking.
 - That synthetic data tells you anything about real markets. It tells you about
   your method.
+
+## Roadmap
+
+What is built and what is planned, in the order it is being worked on.
+Sizes are rough: S is a few hours, M a day or two, L longer.
+
+**Done**
+
+- Real price files: `load_csv_bars` reads a CSV with dates, adjusted closes
+  and order checks.
+- A generic degradation ladder: any `StrategySpec` (builder, parameter grid,
+  warm-up), not only the built-in momentum strategy.
+- `honest-backtest audit`: the ladder on your own strategy and data.
+- Next-bar execution as its own rung (`--fill`).
+- P(edge): Deflated Sharpe for in-sample rungs, Probabilistic Sharpe for the
+  out-of-sample one.
+- The look-ahead check that runs before every audit.
+- The self-contained HTML report (`--html`).
+- Multi-asset panels and books in the engine, with cross-sectional momentum
+  as an example. The ladder and `audit` still run on one instrument.
+- Partial fills under a volume participation cap, and passive limit orders.
+- Permanent impact that decays with a half-life (`PermanentImpactSlippage`).
+- Financing: margin interest, short-borrow fees, interest on cash and a
+  leverage cap.
+- A fast path (`--fast`) that reproduces the engine bit for bit, and a
+  parallel seed sweep (`--workers`).
+- `honest-backtest paper`: paper trading on a growing price file, with a
+  journal and resume.
+- A PyPI-ready package (`honest-backtester`, since `honest-backtest` is taken
+  on PyPI), an MkDocs site and a release workflow. Nothing is published yet.
+
+**Planned**
+
+| Item | What it adds | Size |
+| --- | --- | --- |
+| Purged and embargoed k-fold (CPCV), in review | A distribution of out-of-sample Sharpe instead of one walk-forward path | M |
+| Parquet input and an optional yfinance loader | More ways in besides CSV | S |
+| Config files and JSON results, in review | Reproducible runs without long command lines | S |
+| First PyPI release and a live docs site | `pip install honest-backtester`, once the name is settled | S |
 
 ## License
 
