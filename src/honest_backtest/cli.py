@@ -76,6 +76,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_cpcv(text: str) -> tuple[int, int]:
+    """Parse ``--cpcv N,K`` into ``(n_groups, n_test_groups)``."""
+    try:
+        n_groups, n_test_groups = (int(part) for part in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected N,K such as 6,2 (groups, groups held out); got {text!r}"
+        ) from None
+    if not 1 <= n_test_groups < n_groups:
+        raise argparse.ArgumentTypeError("need 1 <= K < N")
+    return n_groups, n_test_groups
+
+
 def build_audit_parser() -> argparse.ArgumentParser:
     """Build the parser for ``honest-backtest audit``."""
     parser = argparse.ArgumentParser(
@@ -144,6 +157,31 @@ def build_audit_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip replaying the strategy with altered futures to look for look-ahead",
     )
+    parser.add_argument(
+        "--cpcv",
+        type=parse_cpcv,
+        default=None,
+        metavar="N,K",
+        help=(
+            "also run combinatorial purged cross-validation with N groups and K "
+            "held out per split, and report the spread of out-of-sample Sharpe"
+        ),
+    )
+    parser.add_argument(
+        "--cpcv-purge",
+        type=int,
+        default=None,
+        metavar="BARS",
+        help="bars purged from training on each side of a test block "
+        "(default: the strategy's warm-up)",
+    )
+    parser.add_argument(
+        "--cpcv-embargo",
+        type=int,
+        default=0,
+        metavar="BARS",
+        help="extra bars dropped from training after a test block",
+    )
     parser.add_argument("--markdown", action="store_true", help="also print Markdown")
     parser.add_argument(
         "--html",
@@ -182,6 +220,9 @@ def audit_main(argv: list[str]) -> int:
         commission_bps=args.commission_bps,
         commission_per_share=args.commission_per_share,
         check_leaks=not args.no_leak_check,
+        cpcv=args.cpcv,
+        cpcv_purge=args.cpcv_purge,
+        cpcv_embargo=args.cpcv_embargo,
     )
     started = time.perf_counter()
     result = run_audit(bars, spec, config)

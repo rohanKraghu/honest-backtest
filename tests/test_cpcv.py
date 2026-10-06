@@ -9,13 +9,23 @@ the whole window.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import replace
+from datetime import date, timedelta
 
 import numpy as np
 import pytest
 
 from honest_backtest import experiments
+from honest_backtest.audit import (
+    AuditConfig,
+    render_audit_html,
+    render_audit_report,
+    run_audit,
+)
+from honest_backtest.cli import main
 from honest_backtest.commission import ZeroCommission
+from honest_backtest.csvdata import load_csv_bars
 from honest_backtest.experiments import (
     CPCVResult,
     LadderSettings,
@@ -197,3 +207,90 @@ def _scaled(bar, factor: float):
         low=bar.low * factor,
         close=bar.close * factor,
     )
+
+
+# --------------------------------------------------------------------------
+# In the audit
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def price_csv(tmp_path_factory):
+    """Four years of dated synthetic prices written as a CSV."""
+    series = generate_price_series(SyntheticConfig(n_bars=1008), seed=3)
+    path = tmp_path_factory.mktemp("data") / "prices.csv"
+    day = date(2020, 1, 1)
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["Date", "Close", "Volume"])
+        for close, volume in zip(series.closes, series.volumes, strict=True):
+            writer.writerow([day.isoformat(), close, volume])
+            day += timedelta(days=1)
+    return path
+
+
+def test_the_audit_ladder_is_unchanged_by_cross_validation(price_csv, spec):
+    """CPCV is an extra: every rung and reference keeps its exact number."""
+    bars = load_csv_bars(price_csv)
+    base = AuditConfig(settings=SETTINGS, check_leaks=False)
+    plain = run_audit(bars, spec, base)
+    extra = run_audit(bars, spec, replace(base, cpcv=(4, 2), cpcv_embargo=5))
+    assert plain.cpcv is None and extra.cpcv is not None
+    assert extra.ladder.stages == plain.ladder.stages
+    assert extra.ladder.buy_hold_sharpe == plain.ladder.buy_hold_sharpe
+    cpcv = extra.cpcv
+    assert (cpcv.start, cpcv.end) == (plain.ladder.scored_start, plain.ladder.scored_end)
+    assert (cpcv.purge, cpcv.embargo) == (spec.warmup, 5)
+    report = render_audit_report(extra)
+    assert render_audit_report(plain) in report
+    assert "Combinatorial purged cross-validation (4 groups, 2 held out" in report
+    assert f"median {cpcv.median:6.2f}" in report
+    assert f"Paths below zero: {cpcv.n_below_zero} of 3" in report
+
+
+def test_the_audit_command_takes_cpcv_flags(price_csv, tmp_path, capsys):
+    """``--cpcv N,K`` prints the distribution after the ladder and charts it."""
+    page = tmp_path / "audit.html"
+    argv = [
+        "audit",
+        "--data",
+        str(price_csv),
+        "--strategy",
+        "momentum",
+        "--train-size",
+        "252",
+        "--test-size",
+        "252",
+        "--no-leak-check",
+        "--cpcv",
+        "5,2",
+        "--cpcv-purge",
+        "30",
+        "--cpcv-embargo",
+        "4",
+        "--html",
+        str(page),
+    ]
+    assert main(argv) == 0
+    out = capsys.readouterr().out
+    assert out.index("+ walk-forward OOS") < out.index("Combinatorial purged")
+    assert "purge 30, embargo 4 bars" in out
+    assert "10 splits, 4 paths" in out
+    html = page.read_text()
+    assert "Out of sample, across 4 paths" in html
+    assert html.count("<circle") == 4
+
+
+def test_a_bad_cpcv_flag_is_refused(capsys):
+    """``--cpcv`` needs two integers with K below N."""
+    for bad in ("6", "2,2", "a,b"):
+        with pytest.raises(SystemExit):
+            main(["audit", "--data", "x.csv", "--strategy", "momentum", "--cpcv", bad])
+    assert "N,K" in capsys.readouterr().err
+
+
+def test_pages_without_cpcv_have_no_cpcv_section(price_csv, spec):
+    """The HTML section appears only when cross-validation was run."""
+    bars = load_csv_bars(price_csv)
+    result = run_audit(bars, spec, AuditConfig(settings=SETTINGS, check_leaks=False))
+    assert "across" not in render_audit_html(result).split("<h2>The ladder</h2>")[1]
