@@ -16,7 +16,7 @@ command line override the file. Relative paths in the file (``data``,
 directory, so a config keeps working wherever it is run from.
 
 JSON files need nothing beyond the standard library. YAML files need PyYAML,
-which is an optional extra (``pip install "honest-backtest[yaml]"``); without
+which is an optional extra (``pip install "honest-backtester[yaml]"``); without
 it a ``.yaml`` file is refused with a message saying so, rather than parsed
 by something that only looks like a YAML reader.
 """
@@ -70,7 +70,7 @@ def load_config_file(path: str | Path) -> dict[str, Any]:
         except ImportError:
             raise ConfigError(
                 f"{path} is YAML, which needs PyYAML: pip install pyyaml "
-                '(or pip install "honest-backtest[yaml]"), or write the config '
+                '(or pip install "honest-backtester[yaml]"), or write the config '
                 "as JSON instead"
             ) from None
         try:
