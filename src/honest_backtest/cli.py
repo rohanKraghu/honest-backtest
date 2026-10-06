@@ -32,6 +32,7 @@ from .audit import (
 from .config import add_config_option, parse_args_with_config
 from .csvdata import has_real_opens, load_csv_bars
 from .experiments import LadderSettings, StudyConfig, run_seed_sweep, run_study
+from .export import audit_dict, study_dict, to_json
 from .html_report import study_html
 from .report import render_full_report, render_markdown_table
 from .synthetic import SyntheticConfig
@@ -77,6 +78,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="also write a self-contained HTML report with charts to PATH",
+    )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="also write every number in the report as JSON to PATH",
     )
     add_config_option(parser)
     return parser
@@ -198,6 +206,13 @@ def build_audit_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="also write a self-contained HTML report with charts to PATH",
     )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="also write every number in the report as JSON to PATH",
+    )
     add_config_option(parser)
     return parser
 
@@ -243,6 +258,9 @@ def audit_main(argv: list[str]) -> int:
     if args.html is not None:
         args.html.write_text(render_audit_html(result), encoding="utf-8")
         print(f"\nHTML report written to {args.html}")
+    if args.json is not None:
+        args.json.write_text(to_json(audit_dict(result)), encoding="utf-8")
+        print(f"\nJSON results written to {args.json}")
     print()
     print(f"Completed in {time.perf_counter() - started:.1f}s.")
     # A leak makes every number above meaningless, so fail loudly for CI.
@@ -297,6 +315,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.html is not None:
         args.html.write_text(study_html(result), encoding="utf-8")
         print(f"\nHTML report written to {args.html}")
+
+    if args.json is not None:
+        args.json.write_text(to_json(study_dict(result, sweep)), encoding="utf-8")
+        print(f"\nJSON results written to {args.json}")
 
     return 0
 
