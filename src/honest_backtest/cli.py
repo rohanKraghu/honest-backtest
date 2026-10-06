@@ -5,9 +5,11 @@ The implementation lives inside the package so that both entry points -- the
 console script created by ``pip install .`` -- run exactly the same code.
 
 With no subcommand it runs the synthetic study from the README. With
-``audit`` it runs the same ladder on a strategy and price file you supply::
+``audit`` it runs the same ladder on a strategy and price file you supply,
+and ``paper`` trades that strategy on paper as new rows reach the file::
 
     honest-backtest audit --data prices.csv --strategy my_strategy.py
+    honest-backtest paper --data prices.csv --strategy my_strategy.py
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from .experiments import LadderSettings, StudyConfig, run_seed_sweep, run_study
 from .financing import Financing
 from .frictions import MarketFrictions
 from .html_report import study_html
+from .paper_cli import paper_main
 from .report import render_full_report, render_markdown_table
 from .synthetic import SyntheticConfig
 
@@ -291,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] == "audit":
         return audit_main(argv[1:])
+    if argv and argv[0] == "paper":
+        return paper_main(argv[1:])
     args = build_parser().parse_args(argv)
 
     config = StudyConfig(
