@@ -17,7 +17,8 @@ the engine advancing time underneath it.
 
 The cost is speed: about 26 ms per thousand bars here, some two orders of
 magnitude slower than the vectorised equivalent. That trade is worth making
-because the same strategy object, unchanged, could be driven by a live feed.
+because the same strategy object, unchanged, runs on a live feed (see
+:mod:`~honest_backtest.live`).
 """
 
 from __future__ import annotations

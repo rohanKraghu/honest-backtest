@@ -36,7 +36,7 @@ import io
 import json
 import time as _time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -422,6 +422,8 @@ class PaperTrader:
         financing: Interest, borrow fees and leverage limit.
         bars_per_year: Annualisation factor for the result's metrics.
         journal: File to append one JSON line per bar to.
+        journal_meta: Anything else worth recording in the journal's first
+            line, such as the strategy's name and setting.
         resume: Restore the book from the last bar in ``journal`` instead of
             starting fresh. ``history`` must end on that bar.
     """
@@ -444,6 +446,7 @@ class PaperTrader:
         financing: Financing | None = None,
         bars_per_year: int = 252,
         journal: str | Path | None = None,
+        journal_meta: Mapping[str, Any] | None = None,
         resume: bool = False,
     ) -> None:
         """Wire the engine to the feed and replay ``history`` to warm up."""
@@ -500,6 +503,7 @@ class PaperTrader:
                         "initial_capital": float(initial_capital),
                         "fill_timing": fill_timing,
                         "history_bars": self.data.n_history,
+                        "meta": dict(journal_meta or {}),
                     }
                 )
 
