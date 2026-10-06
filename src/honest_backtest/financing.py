@@ -56,10 +56,12 @@ class Financing:
             position: Units held over the bar (negative when short).
             price: Mark price at the start of the bar.
         """
+        return self.accrual_for_book(cash, max(0.0, -position) * price)
+
+    def accrual_for_book(self, cash: float, short_value: float) -> float:
+        """Like :meth:`accrual`, for a book with ``short_value`` sold short in total."""
         rate = self.cash_rate if cash >= 0 else self.borrow_rate
-        interest = cash * rate
-        lending = -max(0.0, -position) * price * self.short_fee
-        return (interest + lending) / self.bars_per_year
+        return (cash * rate - short_value * self.short_fee) / self.bars_per_year
 
     def clip_weight(self, weight: float) -> float:
         """Clip a target weight to the leverage limit."""
