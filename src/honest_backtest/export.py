@@ -213,6 +213,17 @@ def audit_dict(result: AuditResult) -> dict[str, Any]:
             "minimum": cfg.commission_minimum,
         }
     )
+    impact: dict[str, Any] = {
+        "model": "spread plus square-root impact",
+        "half_spread_bps": cfg.half_spread_bps,
+        "impact_coefficient": cfg.impact_coefficient,
+        "bar_volatility": slippage.bar_volatility,
+        "calibrated_on_first_bars": cfg.settings.train_size,
+    }
+    if cfg.permanent_impact > 0:
+        impact["model"] = "spread, square-root impact and decaying permanent impact"
+        impact["permanent_coefficient"] = cfg.permanent_impact
+        impact["half_life_bars"] = cfg.impact_half_life
     ladder = result.ladder
     return {
         "schema_version": SCHEMA_VERSION,
@@ -233,16 +244,7 @@ def audit_dict(result: AuditResult) -> dict[str, Any]:
             "years_scored": result.years_scored,
         },
         "settings": asdict(cfg.settings),
-        "costs": {
-            "slippage": {
-                "model": "spread plus square-root impact",
-                "half_spread_bps": cfg.half_spread_bps,
-                "impact_coefficient": cfg.impact_coefficient,
-                "bar_volatility": slippage.bar_volatility,
-                "calibrated_on_first_bars": cfg.settings.train_size,
-            },
-            "commission": commission,
-        },
+        "costs": {"slippage": impact, "commission": commission},
         "leak_check": leak_dict(result.leaks),
         "ladder": ladder_dict(ladder),
         "honest_t_stat": result.honest_t_stat,
