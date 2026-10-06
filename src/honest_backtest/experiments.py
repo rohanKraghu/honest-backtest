@@ -159,6 +159,7 @@ class StageResult:
             Ratio, which discounts for having picked the best of the grid;
             for the walk-forward rung, which picked nothing on the scored
             data, it is the Probabilistic Sharpe Ratio against zero.
+        returns: Per-bar returns over the scored window, for plotting.
     """
 
     index: int
@@ -168,6 +169,9 @@ class StageResult:
     chosen_params: list[Params]
     honest: bool
     p_edge: float = float("nan")
+    returns: np.ndarray = field(
+        default_factory=lambda: np.zeros(0), compare=False, repr=False
+    )
 
     @property
     def chosen_lookback(self) -> list[Any]:
@@ -188,6 +192,7 @@ class LadderResult:
         folds: The walk-forward folds used by the last stage.
         n_events: Events processed by the out-of-sample engine runs, as
             evidence the event loop actually ran.
+        buy_hold_returns: Per-bar returns of the benchmark, for plotting.
     """
 
     stages: list[StageResult]
@@ -196,6 +201,7 @@ class LadderResult:
     scored_end: int
     folds: list[Fold]
     n_events: dict[str, int]
+    buy_hold_returns: np.ndarray = field(compare=False, repr=False)
 
     @property
     def honest_sharpe(self) -> float:
@@ -547,6 +553,7 @@ def run_ladder(
                 chosen_params=[params],
                 honest=False,
                 p_edge=deflated_sharpe(result.returns(), trials, settings.bars_per_year),
+                returns=result.returns(),
             )
         )
 
@@ -562,6 +569,7 @@ def run_ladder(
             chosen_params=wf_params,
             honest=True,
             p_edge=probabilistic_sharpe(wf_returns),
+            returns=wf_returns,
         )
     )
 
@@ -590,6 +598,7 @@ def run_ladder(
         scored_end=scored_end,
         folds=folds,
         n_events=wf_events,
+        buy_hold_returns=bh.returns(),
     )
 
 
