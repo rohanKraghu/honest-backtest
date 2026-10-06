@@ -315,13 +315,15 @@ walk-forward, CPCV trains on bars after the ones it tests; the purge and
 embargo address information that leaks across the boundary, not a market
 that changes, which is why walk-forward stays the headline and this is an
 extra. The HTML report (`--html`) draws the paths as dots against the
-walk-forward number. In code, `CombinatorialPurgedSplitter` produces the
-splits and paths and `run_cpcv` runs any `StrategySpec` through them.
+walk-forward number. Liquidity and carry settings and `--fast` apply to
+every CPCV run exactly as they do to the walk-forward rung. In code,
+`CombinatorialPurgedSplitter` produces the splits and paths and `run_cpcv`
+runs any `StrategySpec` through them.
 
 ### Settings files and JSON results
 
-Every flag of both commands can live in a file, and every number in the
-report can be written out for another program:
+Every flag of the study and of `audit` can live in a file, and every number
+in the report can be written out for another program:
 
 ```bash
 honest-backtest audit --config examples/audit.yaml --json audit.json
