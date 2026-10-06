@@ -142,6 +142,26 @@ def test_audit_json_matches_the_printed_report(price_csv, tmp_path, capsys):
     assert f"Paths below zero: {cpcv['n_below_zero']} of 3" in out
 
 
+def test_audit_json_records_market_frictions(price_csv, tmp_path, capsys):
+    """Permanent impact, liquidity and carry settings are in the document."""
+    path = tmp_path / "audit.json"
+    argv = ["audit", "--data", str(price_csv), "--strategy", "momentum"]
+    argv += ["--train-size", "252", "--test-size", "252", "--no-leak-check"]
+    argv += ["--permanent-impact", "0.3", "--impact-half-life", "4"]
+    argv += ["--max-participation", "0.02", "--cash-rate", "0.03"]
+    assert main([*argv, "--json", str(path)]) == 0
+    out = capsys.readouterr().out
+    doc = _strict(path.read_text())
+    slippage = doc["costs"]["slippage"]
+    assert slippage["permanent_coefficient"] == 0.3
+    assert slippage["half_life_bars"] == 4
+    frictions = doc["settings"]["frictions"]
+    assert frictions["max_participation"] == 0.02
+    assert frictions["financing"]["cash_rate"] == 0.03
+    assert doc["ladder"]["stages"][-2]["name"] == "+ liquidity and carry"
+    _check_ladder_against_text(doc["ladder"], out)
+
+
 def test_a_config_writes_the_same_json_as_the_flags(tmp_path, capsys):
     """Study: settings by file or by flag give byte-identical results."""
     by_flags = tmp_path / "flags.json"

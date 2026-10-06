@@ -140,7 +140,7 @@ python run_experiment.py --html study.html # also write the charts as a web page
 python run_experiment.py --json study.json # also write every number as JSON
 python run_experiment.py --config examples/study.json   # settings from a file
 python run_experiment.py --fast --workers 4  # same numbers, about 8 seconds
-pytest                                     # 344 tests, ~40 seconds
+pytest                                     # 347 tests, ~40 seconds
 ```
 
 Results are deterministic: the same seed reproduces the same numbers to the last
@@ -541,7 +541,7 @@ one. The engine itself takes `fill_timing` on `run_backtest` and
 
 ## Tests
 
-344 tests, covering the things that would invalidate the result if they were
+347 tests, covering the things that would invalidate the result if they were
 wrong rather than the things that are easy to test:
 
 ```bash
@@ -574,9 +574,9 @@ pytest
 | `test_live.py` | A replayed feed reproduces the backtest's equity and blotter exactly for every fill timing; history warms a stateful strategy to exactly its backtest state and is never traded; a live strategy never sees a bar early; out-of-order bars, rewritten rows and undated polls are refused; a resumed journal matches an uninterrupted one line for line. |
 | `test_paper_cli.py` | `paper` replays a stretch of history as live bars, refuses to overwrite a journal, resumes after the file grows to give the uninterrupted journal exactly, and refuses to resume with a different setting. |
 | `test_cpcv_splits.py` | Combinatorial purged splits, over a spread of group counts, purges and embargoes: no training bar inside a test block or within its purge or embargo, nothing else dropped, every bar tested exactly `C(N-1, K-1)` times, and every path walking the whole window using each test once. |
-| `test_cpcv.py` | The CPCV runner replays only each split's training segments and each group with the bars before it; rewriting every bar outside a split's training set cannot change its fit; path Sharpes come from the stitched paths; `--cpcv` leaves every rung unchanged and reports the spread in text and HTML. |
+| `test_cpcv.py` | The CPCV runner replays only each split's training segments and each group with the bars before it; rewriting every bar outside a split's training set cannot change its fit; path Sharpes come from the stitched paths; the fast path gives the same paths and frictions apply as on the walk-forward rung; `--cpcv` leaves every rung unchanged and reports the spread in text and HTML. |
 | `test_config.py` | A JSON or YAML config reproduces the same flags' output exactly; flags override the file; paths resolve against the file; unknown keys and bad values are refused like bad flags; a YAML file without PyYAML asks for it. |
-| `test_export.py` | `--json` parses as strict JSON and every rung, reference, sweep row, leak check and CPCV statistic matches the printed report; a config and the same flags write byte-identical JSON. |
+| `test_export.py` | `--json` parses as strict JSON and every rung, reference, sweep row, leak check and CPCV statistic matches the printed report; permanent impact, liquidity and carry settings are recorded; a config and the same flags write byte-identical JSON. |
 
 Two real bugs were caught by these tests while writing them, which is the
 argument for having them:
