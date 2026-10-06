@@ -17,14 +17,15 @@ the engine advancing time underneath it.
 
 The cost is speed: about 26 ms per thousand bars here, some two orders of
 magnitude slower than the vectorised equivalent. That trade is worth making
-because the same strategy object, unchanged, could be driven by a live feed.
+because the same strategy object, unchanged, runs on a live feed (see
+:mod:`~honest_backtest.live`).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from queue import Empty, Queue
-from typing import Callable
 
 import numpy as np
 
@@ -32,7 +33,9 @@ from .commission import CommissionModel, ZeroCommission
 from .data import Bar, DataHandler, HistoricBarDataHandler, LookAheadDataHandler
 from .events import EventType, FillEvent, MarketEvent, OrderEvent, SignalEvent
 from .execution import SimulatedExecutionHandler
+from .financing import Financing
 from .metrics import PerformanceMetrics, compute_metrics, simple_returns
+from .multiasset import MultiAssetDataHandler, MultiAssetPortfolio
 from .portfolio import Portfolio, PortfolioSnapshot
 from .slippage import SlippageModel, ZeroSlippage
 from .strategy import Strategy
@@ -69,6 +72,9 @@ class BacktestResult:
             and ``final_cash`` / ``final_position`` give the true end state.
         final_cash: Cash after every fill, including the last bar's.
         final_position: Units held after every fill.
+        unfilled_quantity: Units ordered but never traded: leftovers
+            cancelled by a newer order, and limit orders that expired.
+        total_financing: Net interest and lending fees paid over the run.
     """
 
     timestamps: list[int]
@@ -87,6 +93,8 @@ class BacktestResult:
     snapshots: list[PortfolioSnapshot] = field(default_factory=list)
     final_cash: float = 0.0
     final_position: float = 0.0
+    unfilled_quantity: float = 0.0
+    total_financing: float = 0.0
 
     @property
     def scored_equity(self) -> np.ndarray:
@@ -152,40 +160,58 @@ class Backtest:
     def run(self) -> BacktestResult:
         """Run to completion and return the result.
 
-        The outer loop advances market time exactly once per iteration. The
-        inner loop drains every event that the new bar caused, so time cannot
-        advance in the middle of a decision.
+        Each :meth:`step` advances market time exactly once and drains every
+        event the new bar caused, so time cannot advance in the middle of a
+        decision.
         """
-        while self.data.continue_backtest:
-            self.data.update_bars()
-            if not self.data.continue_backtest:
+        while self.step():
+            pass
+        return self.result()
+
+    def step(self) -> bool:
+        """Advance one bar and process every event it causes.
+
+        A live feed (see :mod:`~honest_backtest.live`) drives this same loop
+        one bar at a time, so a paper trader runs exactly the code a backtest
+        does.
+
+        Returns:
+            ``False`` once the data has run out, ``True`` otherwise.
+        """
+        if not self.data.continue_backtest:
+            return False
+        self.data.update_bars()
+        if not self.data.continue_backtest:
+            return False
+
+        while True:
+            try:
+                event = self.events.get(block=False)
+            except Empty:
                 break
 
-            while True:
-                try:
-                    event = self.events.get(block=False)
-                except Empty:
-                    break
+            self.event_counts[event.type.value] += 1
 
-                self.event_counts[event.type.value] += 1
+            if isinstance(event, MarketEvent):
+                # Orders held over from the previous bar fill first, so
+                # this bar's snapshot already reflects them.
+                for fill in self.execution.fill_pending():
+                    self.event_counts[fill.type.value] += 1
+                    self.portfolio.on_fill(fill)
+                self.portfolio.on_market(event)
+                self.strategy.calculate_signals(event)
+            elif isinstance(event, SignalEvent):
+                self.portfolio.on_signal(event)
+            elif isinstance(event, OrderEvent):
+                self.execution.execute_order(event)
+            elif isinstance(event, FillEvent):
+                self.portfolio.on_fill(event)
+            else:  # pragma: no cover - defensive
+                raise TypeError(f"unhandled event type: {event!r}")
+        return True
 
-                if isinstance(event, MarketEvent):
-                    # Orders held over from the previous bar fill first, so
-                    # this bar's snapshot already reflects them.
-                    for fill in self.execution.fill_pending():
-                        self.event_counts[fill.type.value] += 1
-                        self.portfolio.on_fill(fill)
-                    self.portfolio.on_market(event)
-                    self.strategy.calculate_signals(event)
-                elif isinstance(event, SignalEvent):
-                    self.portfolio.on_signal(event)
-                elif isinstance(event, OrderEvent):
-                    self.execution.execute_order(event)
-                elif isinstance(event, FillEvent):
-                    self.portfolio.on_fill(event)
-                else:  # pragma: no cover - defensive
-                    raise TypeError(f"unhandled event type: {event!r}")
-
+    def result(self) -> BacktestResult:
+        """Everything processed so far, as a :class:`BacktestResult`."""
         return BacktestResult(
             timestamps=self.portfolio.timestamps,
             equity=self.portfolio.equity_curve,
@@ -203,11 +229,14 @@ class Backtest:
             snapshots=list(self.portfolio.history),
             final_cash=self.portfolio.cash,
             final_position=self.portfolio.position,
+            unfilled_quantity=self.execution.cancelled_quantity
+            + self.execution.expired_quantity,
+            total_financing=self.portfolio.total_financing,
         )
 
 
 def run_backtest(
-    bars: list[Bar],
+    bars: list[Bar] | Mapping[str, Sequence[Bar]],
     strategy_factory: StrategyFactory,
     *,
     slippage: SlippageModel | None = None,
@@ -219,11 +248,16 @@ def run_backtest(
     allow_look_ahead: bool = False,
     symbol: str = "SYNTH",
     fill_timing: str = "close",
+    max_participation: float | None = None,
+    limit_offset_bps: float | None = None,
+    limit_expiry_bars: int = 1,
+    financing: Financing | None = None,
 ) -> BacktestResult:
     """Wire up one backtest and run it.
 
     Args:
-        bars: Bars to replay.
+        bars: Bars to replay, or a panel of bars per instrument (see
+            :mod:`~honest_backtest.multiasset`), which runs a multi-asset book.
         strategy_factory: Callable ``(queue, data_handler) -> Strategy``. A
             factory rather than an instance, because the strategy needs the
             queue and handler that this particular run creates, and because
@@ -241,27 +275,58 @@ def run_backtest(
         symbol: Instrument name.
         fill_timing: When orders fill; see
             :class:`~honest_backtest.execution.SimulatedExecutionHandler`.
+        max_participation: Cap on each fill as a fraction of bar volume;
+            ``None`` means unlimited liquidity.
+        limit_offset_bps: Rebalance with passive limit orders this far
+            inside the close; ``None`` means market orders.
+        limit_expiry_bars: Bars a limit order rests before cancellation.
+        financing: Interest, borrow fees and leverage limit; ``None`` means
+            holding a position is free.
 
     Returns:
         The :class:`BacktestResult`.
     """
     events: Queue = Queue()
-    handler_cls = LookAheadDataHandler if allow_look_ahead else HistoricBarDataHandler
-    data = handler_cls(events, bars, symbol=symbol)
-    strategy = strategy_factory(events, data)
-    portfolio = Portfolio(
-        events=events,
-        data=data,
-        symbol=symbol,
-        initial_capital=initial_capital,
-        rebalance_threshold=rebalance_threshold,
-    )
+    if slippage is not None:
+        # One model instance serves every run of a ladder; stateful models
+        # (permanent impact) must not carry one run's trades into the next.
+        slippage.reset()
+    portfolio: Portfolio | MultiAssetPortfolio
+    if isinstance(bars, Mapping):
+        if allow_look_ahead:
+            raise ValueError("the look-ahead demonstration is single-instrument only")
+        data: DataHandler = MultiAssetDataHandler(events, bars)
+        strategy = strategy_factory(events, data)
+        portfolio = MultiAssetPortfolio(
+            events=events,
+            data=data,
+            initial_capital=initial_capital,
+            rebalance_threshold=rebalance_threshold,
+            limit_offset_bps=limit_offset_bps,
+            limit_expiry_bars=limit_expiry_bars,
+            financing=financing,
+        )
+    else:
+        handler_cls = LookAheadDataHandler if allow_look_ahead else HistoricBarDataHandler
+        data = handler_cls(events, bars, symbol=symbol)
+        strategy = strategy_factory(events, data)
+        portfolio = Portfolio(
+            events=events,
+            data=data,
+            symbol=symbol,
+            initial_capital=initial_capital,
+            rebalance_threshold=rebalance_threshold,
+            limit_offset_bps=limit_offset_bps,
+            limit_expiry_bars=limit_expiry_bars,
+            financing=financing,
+        )
     execution = SimulatedExecutionHandler(
         events=events,
         data=data,
         slippage=slippage or ZeroSlippage(),
         commission=commission or ZeroCommission(),
         fill_timing=fill_timing,
+        max_participation=max_participation,
     )
     return Backtest(
         data=data,

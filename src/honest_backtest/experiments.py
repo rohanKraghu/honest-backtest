@@ -20,15 +20,18 @@ strategy on a synthetic path with a known edge.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field, fields
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, field, fields, replace
 from statistics import mean, pstdev
 from typing import Any
 
 import numpy as np
 
+from . import fast as fastpath
 from .commission import CommissionModel, PerShareCommission, ZeroCommission
 from .data import Bar
 from .engine import BacktestResult, run_backtest
+from .frictions import MarketFrictions
 from .metrics import (
     PerformanceMetrics,
     compute_metrics,
@@ -132,6 +135,14 @@ class LadderSettings:
             ``"close"`` keeps that assumption and the ladder has no
             next-bar rung; anything else adds a "+ next-bar execution" rung
             after commissions, and the walk-forward rung inherits it.
+        frictions: Liquidity, order-style and carry frictions. When any is
+            active the ladder gains a "+ liquidity and carry" rung after the
+            execution rungs, and the walk-forward rung and buy-and-hold
+            inherit them.
+        fast: Use :mod:`~honest_backtest.fast`, which records each setting's
+            signals once and replays the accounting without the event
+            queue. Results are identical (the test suite asserts it); runs
+            the fast path cannot reproduce fall back to the engine.
     """
 
     train_size: int = 504
@@ -140,6 +151,8 @@ class LadderSettings:
     rebalance_threshold: float = DEFAULT_REBALANCE_THRESHOLD
     bars_per_year: int = 252
     fill_timing: str = "close"
+    frictions: MarketFrictions | None = None
+    fast: bool = False
 
 
 @dataclass(frozen=True)
@@ -273,8 +286,38 @@ def _run(
     warmup: int,
     look_ahead: bool = False,
     fill_timing: str = "close",
+    realistic: bool = False,
+    cache: fastpath.SignalCache | None = None,
 ) -> BacktestResult:
-    """Run one backtest over ``bars`` with the given friction settings."""
+    """Run one backtest over ``bars`` with the given friction settings.
+
+    ``realistic`` applies ``settings.frictions`` as well. With
+    ``settings.fast`` and a ``cache``, the fast path is used whenever it
+    reproduces the engine exactly.
+    """
+    extra = (
+        settings.frictions.run_kwargs()
+        if realistic and settings.frictions is not None
+        else {}
+    )
+    if (
+        settings.fast
+        and cache is not None
+        and fastpath.supports(fill_timing=fill_timing, **extra)
+    ):
+        signals, leaked = cache.get(bars, spec, params, look_ahead)
+        return fastpath.simulate(
+            bars,
+            signals,
+            slippage=slippage,
+            commission=commission,
+            initial_capital=settings.initial_capital,
+            rebalance_threshold=settings.rebalance_threshold,
+            warmup=warmup,
+            bars_per_year=settings.bars_per_year,
+            fill_timing=fill_timing,
+            used_look_ahead=leaked,
+        )
     return run_backtest(
         list(bars),
         spec.factory(params, look_ahead=look_ahead),
@@ -287,6 +330,7 @@ def _run(
         allow_look_ahead=look_ahead,
         symbol=bars[0].symbol,
         fill_timing=fill_timing,
+        **extra,
     )
 
 
@@ -301,6 +345,8 @@ def fit_in_sample(
     look_ahead: bool = False,
     fill_timing: str = "close",
     trial_sharpes: list[float] | None = None,
+    realistic: bool = False,
+    cache: fastpath.SignalCache | None = None,
 ) -> tuple[Params, BacktestResult]:
     """Pick the parameters that maximise Sharpe on the very window being reported.
 
@@ -319,6 +365,8 @@ def fit_in_sample(
         fill_timing: When orders fill.
         trial_sharpes: If given, the Sharpe of every setting tried is
             appended to it, in grid order, for the Deflated Sharpe Ratio.
+        realistic: Also apply ``settings.frictions``.
+        cache: Signals already replayed, for the fast path.
 
     Returns:
         ``(best_params, result_for_those_params)``.
@@ -335,6 +383,8 @@ def fit_in_sample(
             warmup=warmup,
             look_ahead=look_ahead,
             fill_timing=fill_timing,
+            realistic=realistic,
+            cache=cache,
         )
         sharpe = result.metrics().sharpe
         if trial_sharpes is not None:
@@ -372,6 +422,7 @@ def run_walk_forward(
     Returns:
         ``(metrics, chosen_params_per_fold, event_counts, stitched_returns)``.
     """
+    cache = fastpath.SignalCache() if settings.fast else None
     stitched: list[np.ndarray] = []
     chosen: list[Params] = []
     commission_paid = 0.0
@@ -393,6 +444,8 @@ def run_walk_forward(
             commission=commission,
             warmup=min(spec.warmup, max(0, len(train_bars) - 2)),
             fill_timing=settings.fill_timing,
+            realistic=True,
+            cache=cache,
         )
         chosen.append(best_params)
 
@@ -406,6 +459,8 @@ def run_walk_forward(
             commission=commission,
             warmup=fold.warmup,
             fill_timing=settings.fill_timing,
+            realistic=True,
+            cache=cache,
         )
         stitched.append(result.returns())
         commission_paid += result.total_commission
@@ -529,7 +584,23 @@ def run_ladder(
                 settings.fill_timing,
             )
         )
+    # Rungs from here on also carry liquidity, order-style and carry frictions.
+    first_realistic = len(stage_specs) + 1
+    if settings.frictions is not None and settings.frictions.active:
+        stage_specs.append(
+            (
+                "+ liquidity and carry",
+                "unlimited liquidity and free positions ("
+                + settings.frictions.describe()
+                + ")",
+                slippage,
+                commission,
+                False,
+                settings.fill_timing,
+            )
+        )
 
+    cache = fastpath.SignalCache() if settings.fast else None
     stages: list[StageResult] = []
     for i, (name, removed, slip, comm, leak, timing) in enumerate(stage_specs, start=1):
         trials: list[float] = []
@@ -543,6 +614,8 @@ def run_ladder(
             look_ahead=leak,
             fill_timing=timing,
             trial_sharpes=trials,
+            realistic=i >= first_realistic,
+            cache=cache,
         )
         stages.append(
             StageResult(
@@ -589,6 +662,7 @@ def run_ladder(
         bars_per_year=settings.bars_per_year,
         symbol=bars[0].symbol,
         fill_timing=settings.fill_timing,
+        **(settings.frictions.run_kwargs() if settings.frictions is not None else {}),
     )
 
     return LadderResult(
@@ -602,11 +676,12 @@ def run_ladder(
     )
 
 
-def run_study(cfg: StudyConfig | None = None) -> StudyResult:
+def run_study(cfg: StudyConfig | None = None, *, fast: bool = False) -> StudyResult:
     """Run the full five-stage degradation study for one seed.
 
     Args:
         cfg: Study configuration; defaults to :class:`StudyConfig`.
+        fast: Use the fast path (identical results, see :mod:`~honest_backtest.fast`).
 
     Returns:
         A :class:`StudyResult` containing every stage.
@@ -619,7 +694,7 @@ def run_study(cfg: StudyConfig | None = None) -> StudyResult:
     ladder = run_ladder(
         series.to_bars(),
         momentum_spec(cfg.lookback_grid),
-        cfg.settings(),
+        replace(cfg.settings(), fast=fast),
         slippage=cfg.slippage(),
         commission=cfg.commission(),
     )
@@ -671,8 +746,22 @@ class SeedSweep:
         return m, sd, t
 
 
+def _sweep_one(cfg: StudyConfig, fast: bool) -> tuple[list[str], list[float], bool]:
+    """One seed of a sweep: stage names, stage Sharpes, monotone flag."""
+    result = run_study(cfg, fast=fast)
+    return (
+        [s.name for s in result.stages],
+        [s.metrics.sharpe for s in result.stages],
+        result.is_monotone,
+    )
+
+
 def run_seed_sweep(
-    n_seeds: int = 12, base_config: StudyConfig | None = None
+    n_seeds: int = 12,
+    base_config: StudyConfig | None = None,
+    *,
+    fast: bool = False,
+    workers: int = 1,
 ) -> SeedSweep:
     """Repeat the whole study on ``n_seeds`` independent price paths.
 
@@ -684,30 +773,34 @@ def run_seed_sweep(
     Args:
         n_seeds: Number of independent paths.
         base_config: Configuration to clone; only the seed varies.
+        fast: Use the fast path for every study (identical results).
+        workers: Processes to spread the seeds over. Each seed is
+            independent and deterministic, so the result does not depend on
+            how many there are; 1 runs in this process.
 
     Returns:
         A :class:`SeedSweep`.
     """
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
     base = base_config or StudyConfig()
     seeds = [base.seed + 1000 * i for i in range(n_seeds)]
-    stage_names: list[str] = []
-    collected: list[list[float]] = []
-    monotone: list[bool] = []
+    configs = [replace(base, seed=seed) for seed in seeds]
+    if workers > 1 and n_seeds > 1:
+        with ProcessPoolExecutor(max_workers=min(workers, n_seeds)) as pool:
+            outcomes = list(pool.map(_sweep_one, configs, [fast] * n_seeds))
+    else:
+        outcomes = [_sweep_one(cfg, fast) for cfg in configs]
 
-    for seed in seeds:
-        from dataclasses import replace
-
-        result = run_study(replace(base, seed=seed))
-        if not stage_names:
-            stage_names = [s.name for s in result.stages]
-            collected = [[] for _ in stage_names]
-        for i, stage in enumerate(result.stages):
-            collected[i].append(stage.metrics.sharpe)
-        monotone.append(result.is_monotone)
+    stage_names = outcomes[0][0] if outcomes else []
+    collected: list[list[float]] = [[] for _ in stage_names]
+    for _, sharpes, _ in outcomes:
+        for i, sharpe in enumerate(sharpes):
+            collected[i].append(sharpe)
 
     return SeedSweep(
         seeds=seeds,
         stage_names=stage_names,
         sharpes=collected,
-        monotone_flags=monotone,
+        monotone_flags=[flag for _, _, flag in outcomes],
     )

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from queue import Queue
 
 from .data import DataHandler
+from .financing import Financing
 from .events import FillEvent, MarketEvent, OrderEvent, SignalEvent
 
 
@@ -59,6 +60,14 @@ class Portfolio:
             For a liquid, high-priced instrument the difference is small, and
             rounding would add a noise term unrelated to the point of the
             study.
+        limit_offset_bps: If set, rebalance with passive limit orders this
+            many basis points better than the close (a buy below it, a sell
+            above it) instead of market orders. Some never fill: that missed
+            trade is the cost of not paying the spread.
+        limit_expiry_bars: Bars a limit order rests before it is cancelled.
+        financing: Interest, short-borrow fees and a leverage limit. ``None``
+            (the default) holds positions for free, which flatters leveraged
+            and short books.
     """
 
     events: Queue
@@ -67,6 +76,9 @@ class Portfolio:
     initial_capital: float = 1_000_000.0
     rebalance_threshold: float = 0.05
     allow_fractional: bool = True
+    limit_offset_bps: float | None = None
+    limit_expiry_bars: int = 1
+    financing: Financing | None = None
 
     cash: float = field(init=False)
     position: float = field(init=False, default=0.0)
@@ -76,12 +88,16 @@ class Portfolio:
     total_slippage: float = field(init=False, default=0.0)
     traded_notional: float = field(init=False, default=0.0)
     n_trades: int = field(init=False, default=0)
+    #: Net financing paid: interest and lending fees, less interest earned.
+    total_financing: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
         if self.initial_capital <= 0:
             raise ValueError("initial_capital must be positive")
         if self.rebalance_threshold < 0:
             raise ValueError("rebalance_threshold must be non-negative")
+        if self.limit_offset_bps is not None and self.limit_offset_bps < 0:
+            raise ValueError("limit_offset_bps must be non-negative")
         self.cash = float(self.initial_capital)
 
     def equity_at(self, price: float) -> float:
@@ -97,6 +113,13 @@ class Portfolio:
         which is the correct attribution.
         """
         bar = self.data.current_bar(self.symbol)
+        if self.financing is not None and self.history:
+            # Interest and fees for holding the book over the bar just ended.
+            accrued = self.financing.accrual(
+                self.cash, self.position, self.history[-1].price
+            )
+            self.cash += accrued
+            self.total_financing -= accrued
         self.history.append(
             PortfolioSnapshot(
                 timestamp=event.timestamp,
@@ -119,7 +142,10 @@ class Portfolio:
             # a negative-equity book can still take risk.
             return
 
-        target_units = event.target_weight * equity / price
+        weight = event.target_weight
+        if self.financing is not None:
+            weight = self.financing.clip_weight(weight)
+        target_units = weight * equity / price
         if not self.allow_fractional:
             target_units = float(int(target_units))
         delta = target_units - self.position
@@ -133,14 +159,25 @@ class Portfolio:
             return
 
         direction = "BUY" if delta > 0 else "SELL"
-        self.events.put(
-            OrderEvent(
+        if self.limit_offset_bps is None:
+            order = OrderEvent(
                 symbol=self.symbol,
                 timestamp=event.timestamp,
                 quantity=abs(delta),
                 direction=direction,
             )
-        )
+        else:
+            sign = 1.0 if direction == "BUY" else -1.0
+            order = OrderEvent(
+                symbol=self.symbol,
+                timestamp=event.timestamp,
+                quantity=abs(delta),
+                direction=direction,
+                order_type="LMT",
+                limit_price=price * (1.0 - sign * self.limit_offset_bps / 10_000.0),
+                expiry_bars=self.limit_expiry_bars,
+            )
+        self.events.put(order)
 
     def on_fill(self, event: FillEvent) -> None:
         """Apply a fill to cash and position, and accumulate cost statistics."""

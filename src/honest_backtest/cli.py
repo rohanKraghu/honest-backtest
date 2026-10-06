@@ -5,9 +5,11 @@ The implementation lives inside the package so that both entry points -- the
 console script created by ``pip install .`` -- run exactly the same code.
 
 With no subcommand it runs the synthetic study from the README. With
-``audit`` it runs the same ladder on a strategy and price file you supply::
+``audit`` it runs the same ladder on a strategy and price file you supply,
+and ``paper`` trades that strategy on paper as new rows reach the file::
 
     honest-backtest audit --data prices.csv --strategy my_strategy.py
+    honest-backtest paper --data prices.csv --strategy my_strategy.py
 """
 
 from __future__ import annotations
@@ -27,7 +29,10 @@ from .audit import (
 )
 from .csvdata import has_real_opens, load_csv_bars
 from .experiments import LadderSettings, StudyConfig, run_seed_sweep, run_study
+from .financing import Financing
+from .frictions import MarketFrictions
 from .html_report import study_html
+from .paper_cli import paper_main
 from .report import render_full_report, render_markdown_table
 from .synthetic import SyntheticConfig
 
@@ -60,6 +65,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--test-size", type=int, default=252, help="walk-forward test window, bars"
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="replay each setting's signals once instead of rerunning the event loop "
+        "(results are identical; tests/test_fast.py checks it)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="processes for the seed sweep (results do not depend on it)",
     )
     parser.add_argument(
         "--markdown",
@@ -140,9 +157,54 @@ def build_audit_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--permanent-impact",
+        type=float,
+        default=0.0,
+        help="coefficient of decaying permanent impact (0 = temporary only)",
+    )
+    parser.add_argument(
+        "--impact-half-life",
+        type=float,
+        default=5.0,
+        help="bars for permanent impact to halve",
+    )
+    parser.add_argument(
+        "--max-participation",
+        type=float,
+        default=None,
+        help="cap each fill at this fraction of bar volume, e.g. 0.05",
+    )
+    parser.add_argument(
+        "--limit-offset-bps",
+        type=float,
+        default=None,
+        help="rebalance with limit orders this far inside the close",
+    )
+    parser.add_argument(
+        "--limit-expiry", type=int, default=1, help="bars a limit order rests"
+    )
+    parser.add_argument(
+        "--cash-rate", type=float, default=None, help="annual interest on cash"
+    )
+    parser.add_argument(
+        "--borrow-rate", type=float, default=None, help="annual margin loan rate"
+    )
+    parser.add_argument(
+        "--short-fee", type=float, default=None, help="annual short-borrow fee"
+    )
+    parser.add_argument(
+        "--max-leverage", type=float, default=None, help="cap on gross leverage"
+    )
+    parser.add_argument(
         "--no-leak-check",
         action="store_true",
         help="skip replaying the strategy with altered futures to look for look-ahead",
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="replay each setting's signals once instead of rerunning the event loop "
+        "(results are identical)",
     )
     parser.add_argument("--markdown", action="store_true", help="also print Markdown")
     parser.add_argument(
@@ -153,6 +215,27 @@ def build_audit_parser() -> argparse.ArgumentParser:
         help="also write a self-contained HTML report with charts to PATH",
     )
     return parser
+
+
+def _frictions(args: argparse.Namespace) -> MarketFrictions | None:
+    """Liquidity, order-style and carry settings from audit flags, if any."""
+    rates = (args.cash_rate, args.borrow_rate, args.short_fee, args.max_leverage)
+    financing = None
+    if any(r is not None for r in rates):
+        financing = Financing(
+            cash_rate=args.cash_rate or 0.0,
+            borrow_rate=args.borrow_rate or 0.0,
+            short_fee=args.short_fee or 0.0,
+            max_leverage=args.max_leverage,
+            bars_per_year=args.bars_per_year,
+        )
+    frictions = MarketFrictions(
+        max_participation=args.max_participation,
+        limit_offset_bps=args.limit_offset_bps,
+        limit_expiry_bars=args.limit_expiry,
+        financing=financing,
+    )
+    return frictions if frictions.active else None
 
 
 def audit_main(argv: list[str]) -> int:
@@ -176,12 +259,16 @@ def audit_main(argv: list[str]) -> int:
             rebalance_threshold=args.rebalance_band,
             bars_per_year=args.bars_per_year,
             fill_timing=fill,
+            frictions=_frictions(args),
+            fast=args.fast,
         ),
         half_spread_bps=args.half_spread_bps,
         impact_coefficient=args.impact,
         commission_bps=args.commission_bps,
         commission_per_share=args.commission_per_share,
         check_leaks=not args.no_leak_check,
+        permanent_impact=args.permanent_impact,
+        impact_half_life=args.impact_half_life,
     )
     started = time.perf_counter()
     result = run_audit(bars, spec, config)
@@ -207,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] == "audit":
         return audit_main(argv[1:])
+    if argv and argv[0] == "paper":
+        return paper_main(argv[1:])
     args = build_parser().parse_args(argv)
 
     config = StudyConfig(
@@ -217,18 +306,28 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     started = time.perf_counter()
-    result = run_study(config)
+    result = run_study(config, fast=args.fast)
     sweep = None
     if args.seeds > 1:
-        sweep = run_seed_sweep(args.seeds, replace(config, seed=args.seed))
+        sweep = run_seed_sweep(
+            args.seeds,
+            replace(config, seed=args.seed),
+            fast=args.fast,
+            workers=args.workers,
+        )
     elapsed = time.perf_counter() - started
 
     print(render_full_report(result, sweep))
     print()
-    print(
-        "Events processed by the stage-5 event loop: "
-        + ", ".join(f"{k} {v:,}" for k, v in sorted(result.n_events.items()))
-    )
+    if result.n_events:
+        print(
+            "Events processed by the stage-5 event loop: "
+            + ", ".join(f"{k} {v:,}" for k, v in sorted(result.n_events.items()))
+        )
+    else:
+        print(
+            "Stage 5 ran on the fast path, which replays signals without an event loop."
+        )
     print(f"Completed in {elapsed:.1f}s.")
     print()
     print(
