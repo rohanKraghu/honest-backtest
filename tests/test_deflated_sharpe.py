@@ -70,7 +70,7 @@ def test_degenerate_inputs_are_uninformative_not_errors():
     assert 0.0 <= deflated_sharpe(np.zeros(100), [0.0, 0.0]) <= 1.0
 
 
-def test_every_rung_reports_a_probability_and_in_sample_rungs_are_deflated():
+def test_every_rung_reports_a_probability():
     from honest_backtest.experiments import StudyConfig, run_study
     from honest_backtest.synthetic import SyntheticConfig
 
