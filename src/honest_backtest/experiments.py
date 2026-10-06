@@ -898,6 +898,8 @@ def fit_on_segments(
     slippage: SlippageModel,
     commission: CommissionModel,
     trial_sharpes: list[float] | None = None,
+    realistic: bool = False,
+    cache: fastpath.SignalCache | None = None,
 ) -> Params:
     """Pick the setting with the best Sharpe over several training segments.
 
@@ -918,6 +920,8 @@ def fit_on_segments(
         commission: Commission model.
         trial_sharpes: If given, the pooled Sharpe of every setting tried is
             appended to it, in grid order.
+        realistic: Also apply ``settings.frictions``.
+        cache: Signals already replayed, for the fast path.
 
     Returns:
         The best setting.
@@ -943,6 +947,8 @@ def fit_on_segments(
                 commission=commission,
                 warmup=spec.warmup,
                 fill_timing=settings.fill_timing,
+                realistic=realistic,
+                cache=cache,
             ).returns()
             for a, b in usable
         ]
@@ -1010,6 +1016,9 @@ def run_cpcv(
     groups = splitter.groups(end, start)
     splits = splitter.split(end, start)
     paths = splitter.paths(splits)
+    # The same frictions and fast path as the walk-forward rung, so the
+    # spread describes the number it is printed beside.
+    cache = fastpath.SignalCache() if settings.fast else None
     chosen = [
         fit_on_segments(
             bars,
@@ -1018,6 +1027,8 @@ def run_cpcv(
             settings,
             slippage=slippage,
             commission=commission,
+            realistic=True,
+            cache=cache,
         )
         for split in splits
     ]
@@ -1039,6 +1050,8 @@ def run_cpcv(
                 commission=commission,
                 warmup=history,
                 fill_timing=settings.fill_timing,
+                realistic=True,
+                cache=cache,
             ).returns()
         return scored[key]
 

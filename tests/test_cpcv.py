@@ -33,6 +33,8 @@ from honest_backtest.experiments import (
     momentum_spec,
     run_cpcv,
 )
+from honest_backtest.financing import Financing
+from honest_backtest.frictions import MarketFrictions
 from honest_backtest.metrics import annualised_sharpe
 from honest_backtest.slippage import FixedBpsSlippage
 from honest_backtest.spec import StrategySpec
@@ -182,6 +184,25 @@ def test_cross_validation_is_deterministic(bars, spec, result):
     splitter = CombinatorialPurgedSplitter(5, 2, purge=spec.warmup, embargo=10)
     again = run_cpcv(bars, spec, SETTINGS, splitter, **COSTS)
     np.testing.assert_array_equal(again.path_sharpes, result.path_sharpes)
+
+
+def test_the_fast_path_gives_the_same_distribution(bars, spec, result):
+    """``fast`` changes how the runs are computed, never what they return."""
+    splitter = CombinatorialPurgedSplitter(5, 2, purge=spec.warmup, embargo=10)
+    fast = run_cpcv(bars, spec, replace(SETTINGS, fast=True), splitter, **COSTS)
+    assert fast.chosen_params == result.chosen_params
+    for got, want in zip(fast.path_returns, result.path_returns, strict=True):
+        np.testing.assert_array_equal(got, want)
+
+
+def test_frictions_apply_as_they_do_on_the_walk_forward_rung(bars, spec, result):
+    """The spread is printed beside the walk-forward Sharpe, so it pays the same costs."""
+    frictions = MarketFrictions(financing=Financing(cash_rate=0.05))
+    splitter = CombinatorialPurgedSplitter(5, 2, purge=spec.warmup, embargo=10)
+    carried = run_cpcv(
+        bars, spec, replace(SETTINGS, frictions=frictions), splitter, **COSTS
+    )
+    assert not np.array_equal(carried.path_sharpes, result.path_sharpes)
 
 
 def test_the_window_needs_warm_up_history(bars, spec):
