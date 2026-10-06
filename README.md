@@ -136,7 +136,8 @@ Everything above is printed by that command. Useful variants:
 python run_experiment.py --seeds 1         # headline table only, ~2 seconds
 python run_experiment.py --seed 42         # a different price path
 python run_experiment.py --markdown        # emit the table in Markdown
-pytest                                     # 172 tests, ~6 seconds
+python run_experiment.py --html study.html # also write the charts as a web page
+pytest                                     # 178 tests, ~6 seconds
 ```
 
 Results are deterministic: the same seed reproduces the same numbers to the last
@@ -350,6 +351,15 @@ that reads its own copy of the data, since the altered future never reaches
 it. `--no-leak-check` skips it; in code, `detect_look_ahead(bars, spec)`
 returns the same report.
 
+**A page to send someone.** `--html report.html` (on the study and on
+`audit`) writes a single self-contained HTML file: a Sharpe waterfall that
+starts at the in-sample headline and steps down rung by rung to the
+out-of-sample number, every rung's equity curve on a log axis against buy and
+hold, slippage and commission paid per rung, and the full table with P(edge).
+It is inline SVG and CSS with no scripts and nothing fetched, so it opens
+offline and can be attached to an email or a pull request as it is, and it
+follows the reader's light or dark setting.
+
 **When orders fill.** The synthetic study fills at the close of the bar that
 produced the signal, which assumes you can see a close and trade on it in the
 same instant. Audits default to `--fill auto`, which adds a "+ next-bar
@@ -363,7 +373,7 @@ one. The engine itself takes `fill_timing` on `run_backtest` and
 
 ## Tests
 
-172 tests, covering the things that would invalidate the result if they were
+178 tests, covering the things that would invalidate the result if they were
 wrong rather than the things that are easy to test:
 
 ```bash
@@ -386,6 +396,7 @@ pytest
 | `test_fill_timing.py` | Next-bar fills happen exactly one bar later at that bar's open or close, a signal on the final bar never fills, and the ladder gains its next-bar rung only when asked. |
 | `test_deflated_sharpe.py` | PSR, expected maximum Sharpe and DSR against their definitions: more trials and negative skew both lower the probability, one trial makes DSR equal PSR, and every rung of a study reports one. |
 | `test_leaks.py` | The look-ahead check passes honest strategies and catches the leaky twin, a strategy reading the handler's private list, one refused by the handler, and state shared between runs; random strategies are flagged as uncheckable; a leaky audit opens with a warning and exits non-zero. |
+| `test_html_report.py` | The HTML report is self-contained (no scripts, nothing fetched), carries every rung and reference, escapes names, and is written by `--html`; every rung keeps returns for exactly the scored window. |
 
 Two real bugs were caught by these tests while writing them, which is the
 argument for having them:

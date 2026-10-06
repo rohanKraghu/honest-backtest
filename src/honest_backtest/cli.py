@@ -16,10 +16,18 @@ import argparse
 import sys
 import time
 from dataclasses import replace
+from pathlib import Path
 
-from .audit import AuditConfig, load_spec, render_audit_report, run_audit
+from .audit import (
+    AuditConfig,
+    load_spec,
+    render_audit_html,
+    render_audit_report,
+    run_audit,
+)
 from .csvdata import has_real_opens, load_csv_bars
 from .experiments import LadderSettings, StudyConfig, run_seed_sweep, run_study
+from .html_report import study_html
 from .report import render_full_report, render_markdown_table
 from .synthetic import SyntheticConfig
 
@@ -57,6 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--markdown",
         action="store_true",
         help="also print the table in Markdown, for the README",
+    )
+    parser.add_argument(
+        "--html",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="also write a self-contained HTML report with charts to PATH",
     )
     return parser
 
@@ -130,6 +145,13 @@ def build_audit_parser() -> argparse.ArgumentParser:
         help="skip replaying the strategy with altered futures to look for look-ahead",
     )
     parser.add_argument("--markdown", action="store_true", help="also print Markdown")
+    parser.add_argument(
+        "--html",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="also write a self-contained HTML report with charts to PATH",
+    )
     return parser
 
 
@@ -164,6 +186,9 @@ def audit_main(argv: list[str]) -> int:
     started = time.perf_counter()
     result = run_audit(bars, spec, config)
     print(render_audit_report(result, markdown=args.markdown))
+    if args.html is not None:
+        args.html.write_text(render_audit_html(result), encoding="utf-8")
+        print(f"\nHTML report written to {args.html}")
     print()
     print(f"Completed in {time.perf_counter() - started:.1f}s.")
     # A leak makes every number above meaningless, so fail loudly for CI.
@@ -214,6 +239,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.markdown:
         print()
         print(render_markdown_table(result))
+
+    if args.html is not None:
+        args.html.write_text(study_html(result), encoding="utf-8")
+        print(f"\nHTML report written to {args.html}")
 
     return 0
 
