@@ -194,6 +194,7 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
         f"  walk-forward folds  {len(ladder.folds)} "
         f"(train {cfg.train_size}, test {cfg.test_size}, non-overlapping)",
         f"  settings tried      {len(result.spec.grid)} per fit",
+        f"  next-bar fills      {cfg.fill_timing}",
         "",
         render_table(ladder, param_header=param_names(result.spec)),
         "",
