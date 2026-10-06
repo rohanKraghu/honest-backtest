@@ -8,6 +8,9 @@ With no subcommand it runs the synthetic study from the README. With
 ``audit`` it runs the same ladder on a strategy and price file you supply::
 
     honest-backtest audit --data prices.csv --strategy my_strategy.py
+
+Both take ``--config FILE`` to read their settings from a JSON or YAML file
+(see :mod:`honest_backtest.config`); flags on the command line override it.
 """
 
 from __future__ import annotations
@@ -19,12 +22,14 @@ from dataclasses import replace
 from pathlib import Path
 
 from .audit import (
+    BUILT_IN_STRATEGIES,
     AuditConfig,
     load_spec,
     render_audit_html,
     render_audit_report,
     run_audit,
 )
+from .config import add_config_option, parse_args_with_config
 from .csvdata import has_real_opens, load_csv_bars
 from .experiments import LadderSettings, StudyConfig, run_seed_sweep, run_study
 from .html_report import study_html
@@ -73,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="also write a self-contained HTML report with charts to PATH",
     )
+    add_config_option(parser)
     return parser
 
 
@@ -100,12 +106,14 @@ def build_audit_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--data", required=True, help="CSV with a date and close column, oldest first"
+        "--data",
+        default=None,
+        help="CSV with a date and close column, oldest first (required)",
     )
     parser.add_argument(
         "--strategy",
-        required=True,
-        help="'momentum', a file defining SPEC, or file.py:NAME",
+        default=None,
+        help="'momentum', a file defining SPEC, or file.py:NAME (required)",
     )
     parser.add_argument("--symbol", default=None, help="instrument name for the report")
     parser.add_argument(
@@ -190,12 +198,17 @@ def build_audit_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="also write a self-contained HTML report with charts to PATH",
     )
+    add_config_option(parser)
     return parser
 
 
 def audit_main(argv: list[str]) -> int:
     """Run ``honest-backtest audit`` and print the report."""
-    args = build_audit_parser().parse_args(argv)
+    parser = build_audit_parser()
+    args = parse_args_with_config(parser, argv, keep_names=BUILT_IN_STRATEGIES)
+    for name in ("data", "strategy"):
+        if getattr(args, name) is None:
+            parser.error(f"--{name} is required, on the command line or in --config")
     bars = load_csv_bars(
         args.data,
         symbol=args.symbol,
@@ -248,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] == "audit":
         return audit_main(argv[1:])
-    args = build_parser().parse_args(argv)
+    args = parse_args_with_config(build_parser(), argv)
 
     config = StudyConfig(
         synthetic=SyntheticConfig(n_bars=args.bars),
