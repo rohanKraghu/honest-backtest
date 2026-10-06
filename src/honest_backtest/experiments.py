@@ -29,7 +29,12 @@ import numpy as np
 from .commission import CommissionModel, PerShareCommission, ZeroCommission
 from .data import Bar
 from .engine import BacktestResult, run_backtest
-from .metrics import PerformanceMetrics, compute_metrics
+from .metrics import (
+    PerformanceMetrics,
+    compute_metrics,
+    deflated_sharpe,
+    probabilistic_sharpe,
+)
 from .slippage import SlippageModel, SpreadPlusImpactSlippage, ZeroSlippage
 from .spec import Params, StrategySpec, param_grid
 from .strategy import (
@@ -149,6 +154,11 @@ class StageResult:
         chosen_params: The parameter setting(s) used. One per walk-forward
             fold for the out-of-sample stage, where each fold re-fits.
         honest: Whether this number is one a reviewer should take seriously.
+        p_edge: Probability the rung's Sharpe reflects a real edge rather
+            than luck. For an in-sample rung this is the Deflated Sharpe
+            Ratio, which discounts for having picked the best of the grid;
+            for the walk-forward rung, which picked nothing on the scored
+            data, it is the Probabilistic Sharpe Ratio against zero.
     """
 
     index: int
@@ -157,6 +167,7 @@ class StageResult:
     metrics: PerformanceMetrics
     chosen_params: list[Params]
     honest: bool
+    p_edge: float = float("nan")
 
     @property
     def chosen_lookback(self) -> list[Any]:
@@ -283,6 +294,7 @@ def fit_in_sample(
     warmup: int,
     look_ahead: bool = False,
     fill_timing: str = "close",
+    trial_sharpes: list[float] | None = None,
 ) -> tuple[Params, BacktestResult]:
     """Pick the parameters that maximise Sharpe on the very window being reported.
 
@@ -299,6 +311,8 @@ def fit_in_sample(
         warmup: Leading bars excluded from scoring.
         look_ahead: Use the leaky handler and strategy.
         fill_timing: When orders fill.
+        trial_sharpes: If given, the Sharpe of every setting tried is
+            appended to it, in grid order, for the Deflated Sharpe Ratio.
 
     Returns:
         ``(best_params, result_for_those_params)``.
@@ -317,6 +331,8 @@ def fit_in_sample(
             fill_timing=fill_timing,
         )
         sharpe = result.metrics().sharpe
+        if trial_sharpes is not None:
+            trial_sharpes.append(sharpe)
         if best is None or sharpe > best[0]:
             best = (sharpe, params, result)
     assert best is not None, "parameter grid must not be empty"
@@ -331,7 +347,7 @@ def run_walk_forward(
     *,
     slippage: SlippageModel,
     commission: CommissionModel,
-) -> tuple[PerformanceMetrics, list[Params], dict[str, int]]:
+) -> tuple[PerformanceMetrics, list[Params], dict[str, int], np.ndarray]:
     """Re-fit on each training window, score only on the window that follows.
 
     Returns for each fold's test window are stitched into a single
@@ -348,7 +364,7 @@ def run_walk_forward(
         commission: Commission model.
 
     Returns:
-        ``(metrics, chosen_params_per_fold, event_counts)``.
+        ``(metrics, chosen_params_per_fold, event_counts, stitched_returns)``.
     """
     stitched: list[np.ndarray] = []
     chosen: list[Params] = []
@@ -404,7 +420,7 @@ def run_walk_forward(
         traded_notional=notional,
         returns=returns,
     )
-    return metrics, chosen, events_total
+    return metrics, chosen, events_total, returns
 
 
 def run_ladder(
@@ -510,6 +526,7 @@ def run_ladder(
 
     stages: list[StageResult] = []
     for i, (name, removed, slip, comm, leak, timing) in enumerate(stage_specs, start=1):
+        trials: list[float] = []
         params, result = fit_in_sample(
             bars,
             spec,
@@ -519,6 +536,7 @@ def run_ladder(
             warmup=scored_start,
             look_ahead=leak,
             fill_timing=timing,
+            trial_sharpes=trials,
         )
         stages.append(
             StageResult(
@@ -528,10 +546,11 @@ def run_ladder(
                 metrics=result.metrics(),
                 chosen_params=[params],
                 honest=False,
+                p_edge=deflated_sharpe(result.returns(), trials, settings.bars_per_year),
             )
         )
 
-    wf_metrics, wf_params, wf_events = run_walk_forward(
+    wf_metrics, wf_params, wf_events, wf_returns = run_walk_forward(
         all_bars, spec, settings, folds, slippage=slippage, commission=commission
     )
     stages.append(
@@ -542,6 +561,7 @@ def run_ladder(
             metrics=wf_metrics,
             chosen_params=wf_params,
             honest=True,
+            p_edge=probabilistic_sharpe(wf_returns),
         )
     )
 

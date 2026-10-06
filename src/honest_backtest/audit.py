@@ -207,6 +207,8 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
         f"  Walk-forward out of sample        Sharpe {honest:6.2f}"
         "   <- the only number worth quoting",
         f"  Out-of-sample t-stat ~ {t:.2f}: {verdict}.",
+        f"  P(edge), out of sample: {ladder.stages[-1].p_edge * 100:.1f}% "
+        "(Probabilistic Sharpe Ratio against zero)",
         f"  Sharpe fell monotonically at every rung: "
         f"{'yes' if ladder.is_monotone else 'NO - reported as measured'}",
     ]
