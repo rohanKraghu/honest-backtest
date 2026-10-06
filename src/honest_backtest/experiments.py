@@ -31,6 +31,7 @@ from .data import Bar
 from .engine import BacktestResult, run_backtest
 from .metrics import (
     PerformanceMetrics,
+    annualised_sharpe,
     compute_metrics,
     deflated_sharpe,
     probabilistic_sharpe,
@@ -43,7 +44,13 @@ from .strategy import (
     TimeSeriesMomentumStrategy,
 )
 from .synthetic import SyntheticConfig, generate_price_series, oracle_sharpe
-from .walkforward import Fold, WalkForwardSplitter
+from .walkforward import (
+    CombinatorialPurgedSplitter,
+    CombinatorialSplit,
+    Fold,
+    Span,
+    WalkForwardSplitter,
+)
 
 #: Lookbacks the study is allowed to choose from. Seven values is enough to
 #: overfit noticeably and small enough to keep the whole run under a minute.
@@ -710,4 +717,255 @@ def run_seed_sweep(
         stage_names=stage_names,
         sharpes=collected,
         monotone_flags=monotone,
+    )
+
+
+# --------------------------------------------------------------------------
+# Combinatorial purged cross-validation
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CPCVResult:
+    """The out-of-sample Sharpe of every reconstructed backtest path.
+
+    Walk-forward gives one out-of-sample path, so its Sharpe is a single draw.
+    Combinatorial purged cross-validation tests every bar several times under
+    different training sets, and the resulting paths give that Sharpe a
+    distribution.
+
+    Attributes:
+        n_groups: Groups the window was cut into, ``N``.
+        n_test_groups: Groups held out per split, ``k``.
+        purge: Training bars removed on each side of every test block.
+        embargo: Extra training bars removed after every test block.
+        start: First bar of the cross-validated window.
+        end: One past its last bar.
+        groups: The groups, as ``[start, end)`` spans.
+        splits: Every train/test split.
+        chosen_params: The setting fitted on each split's training bars, in
+            split order.
+        paths: For each path, the ``(group, split_index)`` it took each
+            group's test from.
+        path_sharpes: Annualised Sharpe of each path over the whole window.
+        path_returns: Per-bar returns of each path, for plotting.
+    """
+
+    n_groups: int
+    n_test_groups: int
+    purge: int
+    embargo: int
+    start: int
+    end: int
+    groups: list[Span]
+    splits: list[CombinatorialSplit]
+    chosen_params: list[Params]
+    paths: list[list[tuple[int, int]]]
+    path_sharpes: np.ndarray
+    path_returns: list[np.ndarray] = field(compare=False, repr=False)
+
+    @property
+    def n_paths(self) -> int:
+        """Number of complete backtest paths."""
+        return len(self.paths)
+
+    @property
+    def median(self) -> float:
+        """Median path Sharpe."""
+        return float(np.median(self.path_sharpes))
+
+    @property
+    def quartiles(self) -> tuple[float, float]:
+        """Lower and upper quartile of the path Sharpes."""
+        q1, q3 = np.percentile(self.path_sharpes, [25, 75])
+        return float(q1), float(q3)
+
+    @property
+    def n_below_zero(self) -> int:
+        """Paths whose Sharpe is negative."""
+        return int(np.sum(self.path_sharpes < 0))
+
+    @property
+    def share_below_zero(self) -> float:
+        """Fraction of paths whose Sharpe is negative."""
+        return self.n_below_zero / self.n_paths
+
+
+def _usable_segments(segments: Sequence[Span], warmup: int) -> list[Span]:
+    """Training segments long enough to warm up and still score two bars."""
+    return [(a, b) for a, b in segments if b - a >= warmup + 2]
+
+
+def fit_on_segments(
+    bars: Sequence[Bar],
+    segments: Sequence[Span],
+    spec: StrategySpec,
+    settings: LadderSettings,
+    *,
+    slippage: SlippageModel,
+    commission: CommissionModel,
+    trial_sharpes: list[float] | None = None,
+) -> Params:
+    """Pick the setting with the best Sharpe over several training segments.
+
+    The in-sample fit of :func:`fit_in_sample`, for a training set that is
+    not contiguous. Each segment is replayed on its own, warming up on its
+    own first ``spec.warmup`` bars, so a training run never sees a bar
+    outside the segment: not a test bar, and not a purged or embargoed one.
+    The scored returns of every segment are pooled and the setting with the
+    highest pooled Sharpe wins; ties go to the first in grid order.
+
+    Args:
+        bars: The full bar series.
+        segments: Training spans, ``[start, end)`` indices into ``bars``.
+            Spans too short to warm up are skipped.
+        spec: The strategy and its parameter grid.
+        settings: Shared account settings; ``fill_timing`` is used.
+        slippage: Slippage model.
+        commission: Commission model.
+        trial_sharpes: If given, the pooled Sharpe of every setting tried is
+            appended to it, in grid order.
+
+    Returns:
+        The best setting.
+
+    Raises:
+        ValueError: If no segment is long enough to warm up.
+    """
+    usable = _usable_segments(segments, spec.warmup)
+    if not usable:
+        raise ValueError(
+            f"no training segment is longer than the warm-up of {spec.warmup} bars; "
+            "use fewer groups or a smaller purge"
+        )
+    best: tuple[float, Params] | None = None
+    for params in spec.grid:
+        pooled = [
+            _run(
+                bars[a:b],
+                spec,
+                params,
+                settings,
+                slippage=slippage,
+                commission=commission,
+                warmup=spec.warmup,
+                fill_timing=settings.fill_timing,
+            ).returns()
+            for a, b in usable
+        ]
+        sharpe = annualised_sharpe(np.concatenate(pooled), settings.bars_per_year)
+        if trial_sharpes is not None:
+            trial_sharpes.append(sharpe)
+        if best is None or sharpe > best[0]:
+            best = (sharpe, params)
+    assert best is not None, "parameter grid must not be empty"
+    return best[1]
+
+
+def run_cpcv(
+    bars: Sequence[Bar],
+    spec: StrategySpec,
+    settings: LadderSettings,
+    splitter: CombinatorialPurgedSplitter,
+    *,
+    slippage: SlippageModel,
+    commission: CommissionModel,
+    start: int | None = None,
+    end: int | None = None,
+) -> CPCVResult:
+    """Run combinatorial purged cross-validation and score every path.
+
+    For each split the strategy is fitted on the training segments only (see
+    :func:`fit_on_segments`), then each held-out group is scored with that
+    setting. A group is scored by replaying the ``spec.warmup`` bars just
+    before it unscored, exactly as a walk-forward fold is: those bars are
+    strictly earlier in time, so a live trader would have had them, and they
+    only warm up the strategy's trailing statistics. Nothing after the group
+    is ever replayed. The path returns are stitched on returns, group by
+    group, and each path's Sharpe is computed over the whole window.
+
+    Args:
+        bars: The full bar series, oldest first.
+        spec: The strategy and its parameter grid.
+        settings: Shared account settings.
+        splitter: The group count, test groups, purge and embargo.
+        slippage: Slippage model.
+        commission: Commission model.
+        start: First bar of the cross-validated window. Defaults to the
+            first bar with ``spec.warmup`` bars of history before it.
+        end: One past its last bar. Defaults to the end of ``bars``.
+
+    Returns:
+        A :class:`CPCVResult`.
+
+    Raises:
+        ValueError: If ``start`` leaves the first group without warm-up
+            history, or the window cannot be split.
+    """
+    bars = list(bars)
+    history = max(spec.warmup, 1)
+    start = history if start is None else int(start)
+    end = len(bars) if end is None else int(end)
+    if start < history:
+        raise ValueError(
+            f"start={start} leaves the first group without the {history} bars of "
+            "warm-up history it needs"
+        )
+    if end > len(bars):
+        raise ValueError(f"end={end} is past the {len(bars)} bars supplied")
+
+    groups = splitter.groups(end, start)
+    splits = splitter.split(end, start)
+    paths = splitter.paths(splits)
+    chosen = [
+        fit_on_segments(
+            bars,
+            split.train_segments,
+            spec,
+            settings,
+            slippage=slippage,
+            commission=commission,
+        )
+        for split in splits
+    ]
+
+    # A group's score depends only on the group and the setting, not on which
+    # split chose it, so each pair is run once.
+    scored: dict[tuple[int, str], np.ndarray] = {}
+
+    def group_returns(group: int, params: Params) -> np.ndarray:
+        key = (group, repr(sorted(params.items())))
+        if key not in scored:
+            g_start, g_end = groups[group]
+            scored[key] = _run(
+                bars[g_start - history : g_end],
+                spec,
+                params,
+                settings,
+                slippage=slippage,
+                commission=commission,
+                warmup=history,
+                fill_timing=settings.fill_timing,
+            ).returns()
+        return scored[key]
+
+    path_returns = [
+        np.concatenate([group_returns(g, chosen[s]) for g, s in path]) for path in paths
+    ]
+    sharpes = np.array(
+        [annualised_sharpe(r, settings.bars_per_year) for r in path_returns]
+    )
+    return CPCVResult(
+        n_groups=splitter.n_groups,
+        n_test_groups=splitter.n_test_groups,
+        purge=splitter.purge,
+        embargo=splitter.embargo,
+        start=start,
+        end=end,
+        groups=groups,
+        splits=splits,
+        chosen_params=chosen,
+        paths=paths,
+        path_sharpes=sharpes,
+        path_returns=path_returns,
     )
