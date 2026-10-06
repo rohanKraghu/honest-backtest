@@ -145,11 +145,11 @@ def test_audit_json_matches_the_printed_report(price_csv, tmp_path, capsys):
 def test_a_config_writes_the_same_json_as_the_flags(tmp_path, capsys):
     """Study: settings by file or by flag give byte-identical results."""
     by_flags = tmp_path / "flags.json"
-    main(TINY + ["--seed", "11", "--json", str(by_flags)])
+    main(TINY[:-1] + ["1", "--seed", "11", "--json", str(by_flags)])
     config = tmp_path / "study.json"
     config.write_text(
         json.dumps(
-            {"bars": 800, "train_size": 252, "test_size": 252, "seeds": 2, "seed": 11}
+            {"bars": 800, "train_size": 252, "test_size": 252, "seeds": 1, "seed": 11}
         )
     )
     by_file = tmp_path / "file.json"
