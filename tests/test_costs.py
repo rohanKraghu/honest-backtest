@@ -21,6 +21,7 @@ from honest_backtest.engine import run_backtest
 from honest_backtest.events import OrderEvent
 from honest_backtest.slippage import (
     FixedBpsSlippage,
+    PermanentImpactSlippage,
     SpreadPlusImpactSlippage,
     ZeroSlippage,
 )
@@ -42,6 +43,7 @@ ALL_SLIPPAGE = [
     FixedBpsSlippage(25.0),
     SpreadPlusImpactSlippage(),
     SpreadPlusImpactSlippage(half_spread_bps=5.0, impact_coefficient=1.2),
+    PermanentImpactSlippage(permanent_coefficient=1.0),
 ]
 
 

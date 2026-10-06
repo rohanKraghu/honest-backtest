@@ -39,6 +39,7 @@ from .metrics import PerformanceMetrics, compute_metrics
 from .portfolio import Portfolio, PortfolioSnapshot
 from .slippage import (
     FixedBpsSlippage,
+    PermanentImpactSlippage,
     SlippageModel,
     SpreadPlusImpactSlippage,
     ZeroSlippage,
@@ -74,6 +75,7 @@ __all__ = [
     "OrderEvent",
     "PerShareCommission",
     "PercentOfNotionalCommission",
+    "PermanentImpactSlippage",
     "PerformanceMetrics",
     "Portfolio",
     "PortfolioSnapshot",

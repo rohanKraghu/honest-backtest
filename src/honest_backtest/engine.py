@@ -246,6 +246,10 @@ def run_backtest(
         The :class:`BacktestResult`.
     """
     events: Queue = Queue()
+    if slippage is not None:
+        # One model instance serves every run of a ladder; stateful models
+        # (permanent impact) must not carry one run's trades into the next.
+        slippage.reset()
     handler_cls = LookAheadDataHandler if allow_look_ahead else HistoricBarDataHandler
     data = handler_cls(events, bars, symbol=symbol)
     strategy = strategy_factory(events, data)
