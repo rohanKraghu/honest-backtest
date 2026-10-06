@@ -137,7 +137,7 @@ python run_experiment.py --seeds 1         # headline table only, ~2 seconds
 python run_experiment.py --seed 42         # a different price path
 python run_experiment.py --markdown        # emit the table in Markdown
 python run_experiment.py --html study.html # also write the charts as a web page
-pytest                                     # 178 tests, ~6 seconds
+pytest                                     # 217 tests, ~18 seconds
 ```
 
 Results are deterministic: the same seed reproduces the same numbers to the last
@@ -278,10 +278,13 @@ src/honest_backtest/
 ├── data.py          DataHandler interface; point-in-time handler; the deliberate leak
 ├── synthetic.py     GBM + injected weak signal; the oracle ceiling
 ├── strategy.py      Strategy interface; momentum; the leaky variant; buy-and-hold
-├── slippage.py      SlippageModel: Zero / FixedBps / SpreadPlusImpact
+├── slippage.py      SlippageModel: Zero / FixedBps / SpreadPlusImpact / PermanentImpact
 ├── commission.py    CommissionModel: Zero / PerShare / PercentOfNotional
-├── execution.py     Order → Fill, applying both cost models
+├── execution.py     Order → Fill: timing, volume cap, partial fills, limit orders
 ├── portfolio.py     Cash, positions, equity curve, order sizing, trade blotter
+├── financing.py     Interest on cash and margin, short-borrow fees, leverage cap
+├── frictions.py     Liquidity, order style and carry, bundled for the ladder
+├── multiasset.py    Panel handler, multi-asset book, cross-sectional momentum
 ├── engine.py        The event loop
 ├── metrics.py       Sharpe, drawdown, returns, turnover
 ├── walkforward.py   Rolling / anchored train-test splits
@@ -351,6 +354,22 @@ that reads its own copy of the data, since the altered future never reaches
 it. `--no-leak-check` skips it; in code, `detect_look_ahead(bars, spec)`
 returns the same report.
 
+**Liquidity, carry and permanent impact.** Four more assumptions can be
+removed from an audit, and each is off unless asked for:
+
+```bash
+honest-backtest audit --data prices.csv --strategy my_strategy.py \
+    --permanent-impact 0.3 --impact-half-life 5 \
+    --max-participation 0.05 --borrow-rate 0.06 --short-fee 0.02 --max-leverage 2
+```
+
+`--permanent-impact` swaps in the decaying permanent impact model on every
+slippage rung. The volume cap (`--max-participation`), passive limit orders
+(`--limit-offset-bps`, `--limit-expiry`) and financing (`--cash-rate`,
+`--borrow-rate`, `--short-fee`, `--max-leverage`) add one "+ liquidity and
+carry" rung after the execution rungs, which walk-forward and buy and hold
+inherit, so the rungs before it are unchanged.
+
 **A page to send someone.** `--html report.html` (on the study and on
 `audit`) writes a single self-contained HTML file: a Sharpe waterfall that
 starts at the in-sample headline and steps down rung by rung to the
@@ -373,7 +392,7 @@ one. The engine itself takes `fill_timing` on `run_backtest` and
 
 ## Tests
 
-178 tests, covering the things that would invalidate the result if they were
+217 tests, covering the things that would invalidate the result if they were
 wrong rather than the things that are easy to test:
 
 ```bash
@@ -397,6 +416,11 @@ pytest
 | `test_deflated_sharpe.py` | PSR, expected maximum Sharpe and DSR against their definitions: more trials and negative skew both lower the probability, one trial makes DSR equal PSR, and every rung of a study reports one. |
 | `test_leaks.py` | The look-ahead check passes honest strategies and catches the leaky twin, a strategy reading the handler's private list, one refused by the handler, and state shared between runs; random strategies are flagged as uncheckable; a leaky audit opens with a warning and exits non-zero. |
 | `test_html_report.py` | The HTML report is self-contained (no scripts, nothing fetched), carries every rung and reference, escapes names, and is written by `--html`; every rung keeps returns for exactly the scored window. |
+| `test_permanent_impact.py` | Repeated same-direction fills pay more, the push decays with its half-life, a reversal is never paid back, and a shared model is reset between runs so reruns are identical. |
+| `test_liquidity.py` | A volume cap splits orders across bars, a newer order cancels the leftover instead of trading it twice, capped runs reconcile against the blotter, and limit orders fill only when price trades through, at the limit, and expire. |
+| `test_financing.py` | Cash interest, margin interest and short fees compound exactly on a flat price, the leverage cap clips targets, and the bar-to-bar accounting identity holds with financing included. |
+| `test_multiasset.py` | No instrument is read ahead of the shared cursor, panels align on common dates, a one-instrument panel reproduces the single-asset engine exactly, the book reconciles per instrument, and gross leverage is capped across it. |
+| `test_audit_frictions.py` | Inactive frictions change nothing, active ones add exactly one rung and leave earlier rungs untouched, and the audit flags work end to end. |
 
 Two real bugs were caught by these tests while writing them, which is the
 argument for having them:
@@ -422,19 +446,30 @@ written; keeping it out of the engine makes the point-in-time discipline harder
 to circumvent. numpy is used only for generation and statistics. The cost is that
 a real CSV adapter has to do its own parsing.
 
-**Single instrument.** Every accessor takes a `symbol` and the interface
-anticipates multi-asset, but the handler serves one. Implementing portfolio
-optimisation and cross-sectional signals without a real multi-asset dataset to
-test against would be speculative. This is a stated limitation, not an oversight.
+**One calendar for every instrument.** `run_backtest` also takes a panel, a
+dict of bars per instrument (`multiasset.py`). All instruments share one cursor
+that advances for all of them at once, so none can be read further ahead than
+another; `align_panel` puts dated series on one calendar by keeping only the
+days every instrument traded, rather than inventing prices for the gaps. A
+one-instrument panel reproduces the single-asset engine exactly, which a test
+pins. The degradation ladder and `audit` still run on one instrument; a
+panel is run directly with `run_backtest` (see
+`examples/cross_sectional_momentum.py`).
 
 **Fractional shares.** Removes lot-size friction. For a liquid, high-priced
 instrument the difference is small, and rounding would add a noise term unrelated
 to the point of the study. `Portfolio(allow_fractional=False)` turns it off.
 
-**Fills are always complete.** Orders never get rejected or partially filled;
-the slippage model carries the size penalty instead. Modelling rejection needs a
-liquidity model this project does not have. This is optimistic, and it is named
-as optimistic rather than left implicit.
+**Fills are complete unless you say otherwise.** By default an order fills in
+full at one price and the slippage model carries the size penalty. With
+`max_participation` a fill may take only that share of the bar's volume, and the
+rest works on later bars until it is done or a newer order replaces it (the
+portfolio sizes every order from what it actually holds, so a leftover would
+otherwise be traded twice). With `limit_offset_bps` the portfolio rebalances
+with passive limit orders that rest from the next bar and fill at the limit
+only when price trades strictly through it, since touching it says nothing
+about queue position. They pay no spread, and the trades they miss are the
+cost; `BacktestResult.unfilled_quantity` reports how much.
 
 **A 5% no-trade band.** Without a band, a continuous target weight trades every
 bar and the result is dominated by dust. Real desks use a band. The value is a
@@ -447,11 +482,22 @@ the next period. This is the correct attribution, and it means the last snapshot
 lags the blotter by one fill — pinned by a test so nobody "fixes" it later and
 silently shifts every cost by one period.
 
-**Temporary impact only.** The slippage model has a square-root impact term with
-no permanent component and no decay, so it understates the cost of a strategy
-that trades the same direction repeatedly. The square-root shape is well
-supported empirically; the coefficient is the part nobody agrees on, which is why
-it is a constructor argument rather than a hard-coded number.
+**Temporary impact by default.** The headline slippage model has a square-root
+impact term with no permanent component, so it understates the cost of a
+strategy that trades the same direction repeatedly. The square-root shape is
+well supported empirically; the coefficient is the part nobody agrees on, which
+is why it is a constructor argument rather than a hard-coded number.
+`PermanentImpactSlippage` adds a linear permanent push per fill that decays
+with a half-life, charged to later fills in the same direction. It is never
+credited back on a reversal: the marks come from data that never saw your
+trades, so crediting it would book a gain the equity curve cannot show.
+
+**Holding is free by default.** `Financing` charges interest on a margin loan,
+a lending fee on short market value, pays interest on positive cash, and caps
+gross leverage (across the whole book for a panel). It accrues once per bar on
+the book held over that bar, and the accounting identity test includes it.
+Sharpe is measured against zero, so a cash rate raises it without any skill;
+leave `cash_rate` at zero when quoting Sharpe.
 
 **Walk-forward returns are stitched on returns, not equity levels.** Concatenating
 fold equity curves would invent a jump at each boundary. Each fold's scored
