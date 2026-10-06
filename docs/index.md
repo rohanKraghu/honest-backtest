@@ -33,6 +33,10 @@ that study is in the
 - **Model the frictions** most backtests leave out: permanent impact, volume
   limits, limit orders that do not fill, financing and short fees. See
   [Costs, liquidity and carry](guides/costs.md).
+- **See the spread** behind one out-of-sample number with combinatorial
+  purged cross-validation. See [Cross-validation paths](guides/cross-validation.md).
+- **Script it**: settings from a JSON or YAML file and every result as JSON.
+  See [Settings files and JSON](guides/config-and-json.md).
 - **Paper trade** the same strategy object, unchanged, on bars as they arrive.
   See [Paper trading](guides/paper-trading.md).
 

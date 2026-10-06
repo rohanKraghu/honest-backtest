@@ -23,6 +23,16 @@ The first release.
 - A self-contained HTML report (`--html`) with a Sharpe waterfall, equity
   curves and costs per rung.
 
+### Validation and automation
+
+- Combinatorial purged cross-validation (`--cpcv N,K`, with `--cpcv-purge`
+  and `--cpcv-embargo`): the spread of out-of-sample Sharpe across paths,
+  beside the walk-forward number, in text, HTML and JSON.
+- `--config FILE` for the study and the audit: every flag from a JSON or YAML
+  file, checked exactly like the flag, with the command line taking priority.
+  YAML needs the `yaml` extra.
+- `--json PATH`: every number in the report as strict JSON.
+
 ### Execution realism
 
 - Decaying permanent impact, a volume participation cap with partial fills,
