@@ -23,9 +23,9 @@ because the same strategy object, unchanged, runs on a live feed (see
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from queue import Empty, Queue
-from collections.abc import Callable, Mapping, Sequence
 
 import numpy as np
 
