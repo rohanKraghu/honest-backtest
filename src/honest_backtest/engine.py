@@ -22,9 +22,9 @@ because the same strategy object, unchanged, could be driven by a live feed.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from queue import Empty, Queue
-from typing import Callable
 
 import numpy as np
 
@@ -32,7 +32,9 @@ from .commission import CommissionModel, ZeroCommission
 from .data import Bar, DataHandler, HistoricBarDataHandler, LookAheadDataHandler
 from .events import EventType, FillEvent, MarketEvent, OrderEvent, SignalEvent
 from .execution import SimulatedExecutionHandler
+from .financing import Financing
 from .metrics import PerformanceMetrics, compute_metrics, simple_returns
+from .multiasset import MultiAssetDataHandler, MultiAssetPortfolio
 from .portfolio import Portfolio, PortfolioSnapshot
 from .slippage import SlippageModel, ZeroSlippage
 from .strategy import Strategy
@@ -69,6 +71,9 @@ class BacktestResult:
             and ``final_cash`` / ``final_position`` give the true end state.
         final_cash: Cash after every fill, including the last bar's.
         final_position: Units held after every fill.
+        unfilled_quantity: Units ordered but never traded: leftovers
+            cancelled by a newer order, and limit orders that expired.
+        total_financing: Net interest and lending fees paid over the run.
     """
 
     timestamps: list[int]
@@ -87,6 +92,8 @@ class BacktestResult:
     snapshots: list[PortfolioSnapshot] = field(default_factory=list)
     final_cash: float = 0.0
     final_position: float = 0.0
+    unfilled_quantity: float = 0.0
+    total_financing: float = 0.0
 
     @property
     def scored_equity(self) -> np.ndarray:
@@ -203,11 +210,14 @@ class Backtest:
             snapshots=list(self.portfolio.history),
             final_cash=self.portfolio.cash,
             final_position=self.portfolio.position,
+            unfilled_quantity=self.execution.cancelled_quantity
+            + self.execution.expired_quantity,
+            total_financing=self.portfolio.total_financing,
         )
 
 
 def run_backtest(
-    bars: list[Bar],
+    bars: list[Bar] | Mapping[str, Sequence[Bar]],
     strategy_factory: StrategyFactory,
     *,
     slippage: SlippageModel | None = None,
@@ -219,11 +229,16 @@ def run_backtest(
     allow_look_ahead: bool = False,
     symbol: str = "SYNTH",
     fill_timing: str = "close",
+    max_participation: float | None = None,
+    limit_offset_bps: float | None = None,
+    limit_expiry_bars: int = 1,
+    financing: Financing | None = None,
 ) -> BacktestResult:
     """Wire up one backtest and run it.
 
     Args:
-        bars: Bars to replay.
+        bars: Bars to replay, or a panel of bars per instrument (see
+            :mod:`~honest_backtest.multiasset`), which runs a multi-asset book.
         strategy_factory: Callable ``(queue, data_handler) -> Strategy``. A
             factory rather than an instance, because the strategy needs the
             queue and handler that this particular run creates, and because
@@ -241,27 +256,58 @@ def run_backtest(
         symbol: Instrument name.
         fill_timing: When orders fill; see
             :class:`~honest_backtest.execution.SimulatedExecutionHandler`.
+        max_participation: Cap on each fill as a fraction of bar volume;
+            ``None`` means unlimited liquidity.
+        limit_offset_bps: Rebalance with passive limit orders this far
+            inside the close; ``None`` means market orders.
+        limit_expiry_bars: Bars a limit order rests before cancellation.
+        financing: Interest, borrow fees and leverage limit; ``None`` means
+            holding a position is free.
 
     Returns:
         The :class:`BacktestResult`.
     """
     events: Queue = Queue()
-    handler_cls = LookAheadDataHandler if allow_look_ahead else HistoricBarDataHandler
-    data = handler_cls(events, bars, symbol=symbol)
-    strategy = strategy_factory(events, data)
-    portfolio = Portfolio(
-        events=events,
-        data=data,
-        symbol=symbol,
-        initial_capital=initial_capital,
-        rebalance_threshold=rebalance_threshold,
-    )
+    if slippage is not None:
+        # One model instance serves every run of a ladder; stateful models
+        # (permanent impact) must not carry one run's trades into the next.
+        slippage.reset()
+    portfolio: Portfolio | MultiAssetPortfolio
+    if isinstance(bars, Mapping):
+        if allow_look_ahead:
+            raise ValueError("the look-ahead demonstration is single-instrument only")
+        data: DataHandler = MultiAssetDataHandler(events, bars)
+        strategy = strategy_factory(events, data)
+        portfolio = MultiAssetPortfolio(
+            events=events,
+            data=data,
+            initial_capital=initial_capital,
+            rebalance_threshold=rebalance_threshold,
+            limit_offset_bps=limit_offset_bps,
+            limit_expiry_bars=limit_expiry_bars,
+            financing=financing,
+        )
+    else:
+        handler_cls = LookAheadDataHandler if allow_look_ahead else HistoricBarDataHandler
+        data = handler_cls(events, bars, symbol=symbol)
+        strategy = strategy_factory(events, data)
+        portfolio = Portfolio(
+            events=events,
+            data=data,
+            symbol=symbol,
+            initial_capital=initial_capital,
+            rebalance_threshold=rebalance_threshold,
+            limit_offset_bps=limit_offset_bps,
+            limit_expiry_bars=limit_expiry_bars,
+            financing=financing,
+        )
     execution = SimulatedExecutionHandler(
         events=events,
         data=data,
         slippage=slippage or ZeroSlippage(),
         commission=commission or ZeroCommission(),
         fill_timing=fill_timing,
+        max_participation=max_participation,
     )
     return Backtest(
         data=data,

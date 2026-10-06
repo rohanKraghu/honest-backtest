@@ -29,6 +29,7 @@ import numpy as np
 from .commission import CommissionModel, PerShareCommission, ZeroCommission
 from .data import Bar
 from .engine import BacktestResult, run_backtest
+from .frictions import MarketFrictions
 from .metrics import (
     PerformanceMetrics,
     compute_metrics,
@@ -132,6 +133,10 @@ class LadderSettings:
             ``"close"`` keeps that assumption and the ladder has no
             next-bar rung; anything else adds a "+ next-bar execution" rung
             after commissions, and the walk-forward rung inherits it.
+        frictions: Liquidity, order-style and carry frictions. When any is
+            active the ladder gains a "+ liquidity and carry" rung after the
+            execution rungs, and the walk-forward rung and buy-and-hold
+            inherit them.
     """
 
     train_size: int = 504
@@ -140,6 +145,7 @@ class LadderSettings:
     rebalance_threshold: float = DEFAULT_REBALANCE_THRESHOLD
     bars_per_year: int = 252
     fill_timing: str = "close"
+    frictions: MarketFrictions | None = None
 
 
 @dataclass(frozen=True)
@@ -273,8 +279,17 @@ def _run(
     warmup: int,
     look_ahead: bool = False,
     fill_timing: str = "close",
+    realistic: bool = False,
 ) -> BacktestResult:
-    """Run one backtest over ``bars`` with the given friction settings."""
+    """Run one backtest over ``bars`` with the given friction settings.
+
+    ``realistic`` applies ``settings.frictions`` as well.
+    """
+    extra = (
+        settings.frictions.run_kwargs()
+        if realistic and settings.frictions is not None
+        else {}
+    )
     return run_backtest(
         list(bars),
         spec.factory(params, look_ahead=look_ahead),
@@ -287,6 +302,7 @@ def _run(
         allow_look_ahead=look_ahead,
         symbol=bars[0].symbol,
         fill_timing=fill_timing,
+        **extra,
     )
 
 
@@ -301,6 +317,7 @@ def fit_in_sample(
     look_ahead: bool = False,
     fill_timing: str = "close",
     trial_sharpes: list[float] | None = None,
+    realistic: bool = False,
 ) -> tuple[Params, BacktestResult]:
     """Pick the parameters that maximise Sharpe on the very window being reported.
 
@@ -319,6 +336,7 @@ def fit_in_sample(
         fill_timing: When orders fill.
         trial_sharpes: If given, the Sharpe of every setting tried is
             appended to it, in grid order, for the Deflated Sharpe Ratio.
+        realistic: Also apply ``settings.frictions``.
 
     Returns:
         ``(best_params, result_for_those_params)``.
@@ -335,6 +353,7 @@ def fit_in_sample(
             warmup=warmup,
             look_ahead=look_ahead,
             fill_timing=fill_timing,
+            realistic=realistic,
         )
         sharpe = result.metrics().sharpe
         if trial_sharpes is not None:
@@ -393,6 +412,7 @@ def run_walk_forward(
             commission=commission,
             warmup=min(spec.warmup, max(0, len(train_bars) - 2)),
             fill_timing=settings.fill_timing,
+            realistic=True,
         )
         chosen.append(best_params)
 
@@ -406,6 +426,7 @@ def run_walk_forward(
             commission=commission,
             warmup=fold.warmup,
             fill_timing=settings.fill_timing,
+            realistic=True,
         )
         stitched.append(result.returns())
         commission_paid += result.total_commission
@@ -529,6 +550,21 @@ def run_ladder(
                 settings.fill_timing,
             )
         )
+    # Rungs from here on also carry liquidity, order-style and carry frictions.
+    first_realistic = len(stage_specs) + 1
+    if settings.frictions is not None and settings.frictions.active:
+        stage_specs.append(
+            (
+                "+ liquidity and carry",
+                "unlimited liquidity and free positions ("
+                + settings.frictions.describe()
+                + ")",
+                slippage,
+                commission,
+                False,
+                settings.fill_timing,
+            )
+        )
 
     stages: list[StageResult] = []
     for i, (name, removed, slip, comm, leak, timing) in enumerate(stage_specs, start=1):
@@ -543,6 +579,7 @@ def run_ladder(
             look_ahead=leak,
             fill_timing=timing,
             trial_sharpes=trials,
+            realistic=i >= first_realistic,
         )
         stages.append(
             StageResult(
@@ -589,6 +626,7 @@ def run_ladder(
         bars_per_year=settings.bars_per_year,
         symbol=bars[0].symbol,
         fill_timing=settings.fill_timing,
+        **(settings.frictions.run_kwargs() if settings.frictions is not None else {}),
     )
 
     return LadderResult(
