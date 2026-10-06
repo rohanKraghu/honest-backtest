@@ -121,6 +121,12 @@ class LadderSettings:
         initial_capital: Starting cash for every run.
         rebalance_threshold: No-trade band as a fraction of equity.
         bars_per_year: Annualisation factor.
+        fill_timing: When orders fill once the ladder stops assuming they
+            fill at the signal bar's close (see
+            :class:`~honest_backtest.execution.SimulatedExecutionHandler`).
+            ``"close"`` keeps that assumption and the ladder has no
+            next-bar rung; anything else adds a "+ next-bar execution" rung
+            after commissions, and the walk-forward rung inherits it.
     """
 
     train_size: int = 504
@@ -128,6 +134,7 @@ class LadderSettings:
     initial_capital: float = DEFAULT_INITIAL_CAPITAL
     rebalance_threshold: float = DEFAULT_REBALANCE_THRESHOLD
     bars_per_year: int = 252
+    fill_timing: str = "close"
 
 
 @dataclass(frozen=True)
@@ -248,6 +255,7 @@ def _run(
     commission: CommissionModel,
     warmup: int,
     look_ahead: bool = False,
+    fill_timing: str = "close",
 ) -> BacktestResult:
     """Run one backtest over ``bars`` with the given friction settings."""
     return run_backtest(
@@ -261,6 +269,7 @@ def _run(
         bars_per_year=settings.bars_per_year,
         allow_look_ahead=look_ahead,
         symbol=bars[0].symbol,
+        fill_timing=fill_timing,
     )
 
 
@@ -273,6 +282,7 @@ def fit_in_sample(
     commission: CommissionModel,
     warmup: int,
     look_ahead: bool = False,
+    fill_timing: str = "close",
 ) -> tuple[Params, BacktestResult]:
     """Pick the parameters that maximise Sharpe on the very window being reported.
 
@@ -288,6 +298,7 @@ def fit_in_sample(
         commission: Commission model.
         warmup: Leading bars excluded from scoring.
         look_ahead: Use the leaky handler and strategy.
+        fill_timing: When orders fill.
 
     Returns:
         ``(best_params, result_for_those_params)``.
@@ -303,6 +314,7 @@ def fit_in_sample(
             commission=commission,
             warmup=warmup,
             look_ahead=look_ahead,
+            fill_timing=fill_timing,
         )
         sharpe = result.metrics().sharpe
         if best is None or sharpe > best[0]:
@@ -358,6 +370,7 @@ def run_walk_forward(
             slippage=slippage,
             commission=commission,
             warmup=min(spec.warmup, max(0, len(train_bars) - 2)),
+            fill_timing=settings.fill_timing,
         )
         chosen.append(best_params)
 
@@ -370,6 +383,7 @@ def run_walk_forward(
             slippage=slippage,
             commission=commission,
             warmup=fold.warmup,
+            fill_timing=settings.fill_timing,
         )
         stitched.append(result.returns())
         commission_paid += result.total_commission
@@ -449,6 +463,7 @@ def run_ladder(
                 zero_slip,
                 zero_comm,
                 True,
+                "close",
             ),
             (
                 "+ point-in-time data",
@@ -456,6 +471,7 @@ def run_ladder(
                 zero_slip,
                 zero_comm,
                 False,
+                "close",
             ),
         ]
     else:
@@ -466,15 +482,34 @@ def run_ladder(
                 zero_slip,
                 zero_comm,
                 False,
+                "close",
             )
         )
     stage_specs += [
-        ("+ slippage", "free execution at the close", slippage, zero_comm, False),
-        ("+ commissions", "zero brokerage fees", slippage, commission, False),
+        (
+            "+ slippage",
+            "free execution at the close",
+            slippage,
+            zero_comm,
+            False,
+            "close",
+        ),
+        ("+ commissions", "zero brokerage fees", slippage, commission, False, "close"),
     ]
+    if settings.fill_timing != "close":
+        stage_specs.append(
+            (
+                "+ next-bar execution",
+                "filling at the close the signal was computed from",
+                slippage,
+                commission,
+                False,
+                settings.fill_timing,
+            )
+        )
 
     stages: list[StageResult] = []
-    for i, (name, removed, slip, comm, leak) in enumerate(stage_specs, start=1):
+    for i, (name, removed, slip, comm, leak, timing) in enumerate(stage_specs, start=1):
         params, result = fit_in_sample(
             bars,
             spec,
@@ -483,6 +518,7 @@ def run_ladder(
             commission=comm,
             warmup=scored_start,
             look_ahead=leak,
+            fill_timing=timing,
         )
         stages.append(
             StageResult(
@@ -524,6 +560,7 @@ def run_ladder(
         warmup=scored_start,
         bars_per_year=settings.bars_per_year,
         symbol=bars[0].symbol,
+        fill_timing=settings.fill_timing,
     )
 
     return LadderResult(

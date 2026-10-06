@@ -94,3 +94,43 @@ def test_an_order_on_the_last_bar_is_never_filled():
 def test_unknown_timing_is_rejected():
     with pytest.raises(ValueError, match="fill_timing"):
         SimulatedExecutionHandler(None, None, fill_timing="tomorrow")
+
+
+def test_has_real_opens_tells_derived_from_real():
+    from honest_backtest.csvdata import has_real_opens
+
+    assert not has_real_opens(bars_from_series(CLOSES))
+    assert has_real_opens(_gapped_bars())
+
+
+def test_ladder_gains_a_next_bar_rung_only_when_asked():
+    from honest_backtest.commission import PercentOfNotionalCommission
+    from honest_backtest.experiments import LadderSettings, momentum_spec, run_ladder
+    from honest_backtest.spec import StrategySpec
+    from honest_backtest.synthetic import SyntheticConfig, generate_price_series
+
+    bars = generate_price_series(SyntheticConfig(n_bars=1008), seed=7).to_bars()
+    base = momentum_spec((5, 20))
+    spec = StrategySpec(name="m", build=base.build, grid=base.grid, warmup=base.warmup)
+    kwargs = dict(
+        slippage=FixedBpsSlippage(2.0), commission=PercentOfNotionalCommission(1)
+    )
+
+    plain = run_ladder(
+        bars, spec, LadderSettings(train_size=252, test_size=252), **kwargs
+    )
+    delayed = run_ladder(
+        bars,
+        spec,
+        LadderSettings(train_size=252, test_size=252, fill_timing="next_close"),
+        **kwargs,
+    )
+    assert "+ next-bar execution" not in [s.name for s in plain.stages]
+    names = [s.name for s in delayed.stages]
+    assert names[-2:] == ["+ next-bar execution", "+ walk-forward OOS"]
+    # The rungs before it are untouched by the setting.
+    assert [s.metrics for s in delayed.stages[:3]] == [
+        s.metrics for s in plain.stages[:3]
+    ]
+    # A one-bar delay on a momentum signal is not free.
+    assert delayed.stages[3].metrics.sharpe != plain.stages[2].metrics.sharpe

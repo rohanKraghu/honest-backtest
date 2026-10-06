@@ -196,3 +196,13 @@ def load_csv_bars(
     if len(bars) < 2:
         raise CSVFormatError(f"{path} has {len(bars)} rows; need at least 2")
     return bars
+
+
+def has_real_opens(bars: list[Bar]) -> bool:
+    """Whether any bar's open differs from the previous close.
+
+    A close-only file gets opens derived from the previous close, and then
+    filling "at the next open" is the same as filling at this close. The
+    audit uses this to fall back to the next bar's close in that case.
+    """
+    return any(b.open != a.close for a, b in zip(bars, bars[1:], strict=False))

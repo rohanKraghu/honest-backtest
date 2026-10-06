@@ -18,7 +18,7 @@ import time
 from dataclasses import replace
 
 from .audit import AuditConfig, load_spec, render_audit_report, run_audit
-from .csvdata import load_csv_bars
+from .csvdata import has_real_opens, load_csv_bars
 from .experiments import LadderSettings, StudyConfig, run_seed_sweep, run_study
 from .report import render_full_report, render_markdown_table
 from .synthetic import SyntheticConfig
@@ -115,6 +115,15 @@ def build_audit_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--commission-per-share", type=float, default=0.005, help="per-share fee"
     )
+    parser.add_argument(
+        "--fill",
+        choices=("auto", "close", "next_open", "next_close"),
+        default="auto",
+        help=(
+            "when the next-bar rung fills orders; auto uses next_open if the "
+            "file has real opens, else next_close; close drops the rung"
+        ),
+    )
     parser.add_argument("--markdown", action="store_true", help="also print Markdown")
     return parser
 
@@ -129,6 +138,9 @@ def audit_main(argv: list[str]) -> int:
         default_volume=args.default_volume,
     )
     spec = load_spec(args.strategy)
+    fill = args.fill
+    if fill == "auto":
+        fill = "next_open" if has_real_opens(bars) else "next_close"
     config = AuditConfig(
         settings=LadderSettings(
             train_size=args.train_size,
@@ -136,6 +148,7 @@ def audit_main(argv: list[str]) -> int:
             initial_capital=args.capital,
             rebalance_threshold=args.rebalance_band,
             bars_per_year=args.bars_per_year,
+            fill_timing=fill,
         ),
         half_spread_bps=args.half_spread_bps,
         impact_coefficient=args.impact,
