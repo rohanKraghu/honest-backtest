@@ -162,10 +162,13 @@ def test_the_shipped_audit_config_reproduces_its_flags(capsys):
         str(EXAMPLES / "sma_crossover.py"),
         "--cpcv",
         "6,2",
+        "--no-leak-check",
     ]
     assert main(argv) == 0
     by_flags = capsys.readouterr().out
-    assert main(["audit", "--config", str(EXAMPLES / "audit.yaml")]) == 0
+    # A flag added on top of the file applies to both runs alike.
+    argv = ["audit", "--config", str(EXAMPLES / "audit.yaml"), "--no-leak-check"]
+    assert main(argv) == 0
     by_file = capsys.readouterr().out
     assert _stable(by_file) == _stable(by_flags)
     assert "Combinatorial purged cross-validation (6 groups" in by_file
