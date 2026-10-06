@@ -594,4 +594,4 @@ captured, which is what makes stage 5 cover exactly the same bars as stages 1–
 
 ## License
 
-MIT.
+MIT; see [LICENSE](LICENSE).
