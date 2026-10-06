@@ -64,6 +64,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--test-size", type=int, default=252, help="walk-forward test window, bars"
     )
     parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="replay each setting's signals once instead of rerunning the event loop "
+        "(results are identical; tests/test_fast.py checks it)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="processes for the seed sweep (results do not depend on it)",
+    )
+    parser.add_argument(
         "--markdown",
         action="store_true",
         help="also print the table in Markdown, for the README",
@@ -185,6 +197,12 @@ def build_audit_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip replaying the strategy with altered futures to look for look-ahead",
     )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="replay each setting's signals once instead of rerunning the event loop "
+        "(results are identical)",
+    )
     parser.add_argument("--markdown", action="store_true", help="also print Markdown")
     parser.add_argument(
         "--html",
@@ -239,6 +257,7 @@ def audit_main(argv: list[str]) -> int:
             bars_per_year=args.bars_per_year,
             fill_timing=fill,
             frictions=_frictions(args),
+            fast=args.fast,
         ),
         half_spread_bps=args.half_spread_bps,
         impact_coefficient=args.impact,
@@ -282,18 +301,28 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     started = time.perf_counter()
-    result = run_study(config)
+    result = run_study(config, fast=args.fast)
     sweep = None
     if args.seeds > 1:
-        sweep = run_seed_sweep(args.seeds, replace(config, seed=args.seed))
+        sweep = run_seed_sweep(
+            args.seeds,
+            replace(config, seed=args.seed),
+            fast=args.fast,
+            workers=args.workers,
+        )
     elapsed = time.perf_counter() - started
 
     print(render_full_report(result, sweep))
     print()
-    print(
-        "Events processed by the stage-5 event loop: "
-        + ", ".join(f"{k} {v:,}" for k, v in sorted(result.n_events.items()))
-    )
+    if result.n_events:
+        print(
+            "Events processed by the stage-5 event loop: "
+            + ", ".join(f"{k} {v:,}" for k, v in sorted(result.n_events.items()))
+        )
+    else:
+        print(
+            "Stage 5 ran on the fast path, which replays signals without an event loop."
+        )
     print(f"Completed in {elapsed:.1f}s.")
     print()
     print(

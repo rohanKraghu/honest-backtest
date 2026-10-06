@@ -137,7 +137,8 @@ python run_experiment.py --seeds 1         # headline table only, ~2 seconds
 python run_experiment.py --seed 42         # a different price path
 python run_experiment.py --markdown        # emit the table in Markdown
 python run_experiment.py --html study.html # also write the charts as a web page
-pytest                                     # 217 tests, ~18 seconds
+python run_experiment.py --fast --workers 4  # same numbers, about 8 seconds
+pytest                                     # 248 tests, ~25 seconds
 ```
 
 Results are deterministic: the same seed reproduces the same numbers to the last
@@ -201,7 +202,8 @@ out-of-sample Sharpe is read against buy-and-hold and against zero, with its
 approximate t-stat (Sharpe × √years). The impact model's volatility is
 estimated from the first training window only, which ends before any scored
 bar. Costs, windows and capital are all flags; `honest-backtest audit --help`
-lists them.
+lists them. `--fast` prints the same report sooner (see the design notes on the
+fast path).
 
 ## Architecture
 
@@ -286,6 +288,7 @@ src/honest_backtest/
 ├── frictions.py     Liquidity, order style and carry, bundled for the ladder
 ├── multiasset.py    Panel handler, multi-asset book, cross-sectional momentum
 ├── engine.py        The event loop
+├── fast.py          Signal replay that reproduces the engine exactly, for sweeps
 ├── metrics.py       Sharpe, drawdown, returns, turnover
 ├── walkforward.py   Rolling / anchored train-test splits
 ├── spec.py          StrategySpec: builder + parameter grid + warm-up
@@ -392,7 +395,7 @@ one. The engine itself takes `fill_timing` on `run_backtest` and
 
 ## Tests
 
-217 tests, covering the things that would invalidate the result if they were
+248 tests, covering the things that would invalidate the result if they were
 wrong rather than the things that are easy to test:
 
 ```bash
@@ -408,7 +411,7 @@ pytest
 | `test_degradation.py` | The headline claim itself, so it cannot drift away from the code: look-ahead inflates Sharpe, each friction reduces it, every stage is scored over identical bars. |
 | `test_synthetic.py` | The seed reproduces exactly; the injected edge is forward-looking and weak. |
 | `test_metrics.py`, `test_engine.py` | Statistics against hand-computed values; causal event ordering; the queue is fully drained; runs are deterministic. |
-| `test_cli.py` | The documented one-line command actually runs and prints the table, including the synthetic-data disclaimer. |
+| `test_cli.py` | The documented one-line command actually runs and prints the table, including the synthetic-data disclaimer; `--fast` and `--workers` print the same report. |
 | `test_spec.py` | The ladder runs on strategies other than momentum, with four rungs when there is no leaky twin; the built-in study is exactly the generic ladder on the momentum spec. |
 | `test_csvdata.py` | Real files load with dates and adjustment; out-of-order dates, duplicates, bad prices and a silently missing volume are refused. |
 | `test_audit.py` | The `audit` command runs end to end on a user file, strategy references resolve or fail with a reason, and the cost model is calibrated before the scored window. |
@@ -421,6 +424,7 @@ pytest
 | `test_financing.py` | Cash interest, margin interest and short fees compound exactly on a flat price, the leverage cap clips targets, and the bar-to-bar accounting identity holds with financing included. |
 | `test_multiasset.py` | No instrument is read ahead of the shared cursor, panels align on common dates, a one-instrument panel reproduces the single-asset engine exactly, the book reconciles per instrument, and gross leverage is capped across it. |
 | `test_audit_frictions.py` | Inactive frictions change nothing, active ones add exactly one rung and leave earlier rungs untouched, and the audit flags work end to end. |
+| `test_fast.py` | The fast path returns exactly the engine's equity, fills and costs (equality, not closeness) for every fill timing, cost model and leaky strategy; the fast study and a parallel seed sweep match the serial engine; it declines settings it cannot reproduce. |
 
 Two real bugs were caught by these tests while writing them, which is the
 argument for having them:
@@ -439,7 +443,21 @@ as obvious.
 speed. Bought in exchange: look-ahead bias becomes structurally impossible, and
 the strategy code is live-tradeable as written. For this project the whole point
 is the guarantee, so the trade is easy. For a large parameter sweep it would not
-be.
+be, which is what the fast path is for.
+
+**A fast path that must agree to the last digit.** Most of a study's time goes
+on rerunning the same strategy with the same parameters over the same bars
+while only the cost model changes. `--fast` (or `LadderSettings(fast=True)`)
+records each setting's signals once, by driving the real strategy through the
+real point-in-time handler, then replays them through the portfolio's sizing
+rules and the same slippage and commission objects in the engine's order. No
+signal logic is rewritten, so there is no second implementation to drift, and
+`test_fast.py` asserts bit-for-bit equality rather than closeness. Volume caps,
+limit orders and financing are not reproduced, so a ladder with any of those
+falls back to the engine for that rung. The seed sweep also takes `--workers`
+to run seeds in separate processes; each seed is deterministic, so the result
+does not depend on the count. On four cores the full study drops from about 36
+seconds to about 8.
 
 **No pandas.** A DataFrame in the hot path is how vectorised backtests get
 written; keeping it out of the engine makes the point-in-time discipline harder

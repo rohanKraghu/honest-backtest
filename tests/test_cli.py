@@ -62,3 +62,22 @@ def test_markdown_output_is_a_markdown_table(capsys):
 def test_an_impossible_configuration_fails_loudly():
     with pytest.raises(ValueError, match="too short"):
         main(["--bars", "300", "--train-size", "504", "--seeds", "1"])
+
+
+def _without_timing(out: str) -> list[str]:
+    return [
+        line
+        for line in out.splitlines()
+        if not line.startswith(("Completed in", "Events processed", "Stage 5 ran"))
+    ]
+
+
+def test_fast_and_parallel_flags_print_the_same_report(capsys):
+    """--fast and --workers change how long the study takes, not what it says."""
+    args = TINY[:-2] + ["--seeds", "2"]
+    main(args)
+    slow = capsys.readouterr().out
+    main(args + ["--fast", "--workers", "2"])
+    fast = capsys.readouterr().out
+    assert _without_timing(fast) == _without_timing(slow)
+    assert "fast path" in fast
