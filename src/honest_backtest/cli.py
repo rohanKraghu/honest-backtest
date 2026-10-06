@@ -16,10 +16,18 @@ import argparse
 import sys
 import time
 from dataclasses import replace
+from pathlib import Path
 
-from .audit import AuditConfig, load_spec, render_audit_report, run_audit
-from .csvdata import load_csv_bars
+from .audit import (
+    AuditConfig,
+    load_spec,
+    render_audit_html,
+    render_audit_report,
+    run_audit,
+)
+from .csvdata import has_real_opens, load_csv_bars
 from .experiments import LadderSettings, StudyConfig, run_seed_sweep, run_study
+from .html_report import study_html
 from .report import render_full_report, render_markdown_table
 from .synthetic import SyntheticConfig
 
@@ -57,6 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--markdown",
         action="store_true",
         help="also print the table in Markdown, for the README",
+    )
+    parser.add_argument(
+        "--html",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="also write a self-contained HTML report with charts to PATH",
     )
     return parser
 
@@ -115,7 +130,28 @@ def build_audit_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--commission-per-share", type=float, default=0.005, help="per-share fee"
     )
+    parser.add_argument(
+        "--fill",
+        choices=("auto", "close", "next_open", "next_close"),
+        default="auto",
+        help=(
+            "when the next-bar rung fills orders; auto uses next_open if the "
+            "file has real opens, else next_close; close drops the rung"
+        ),
+    )
+    parser.add_argument(
+        "--no-leak-check",
+        action="store_true",
+        help="skip replaying the strategy with altered futures to look for look-ahead",
+    )
     parser.add_argument("--markdown", action="store_true", help="also print Markdown")
+    parser.add_argument(
+        "--html",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="also write a self-contained HTML report with charts to PATH",
+    )
     return parser
 
 
@@ -129,6 +165,9 @@ def audit_main(argv: list[str]) -> int:
         default_volume=args.default_volume,
     )
     spec = load_spec(args.strategy)
+    fill = args.fill
+    if fill == "auto":
+        fill = "next_open" if has_real_opens(bars) else "next_close"
     config = AuditConfig(
         settings=LadderSettings(
             train_size=args.train_size,
@@ -136,18 +175,24 @@ def audit_main(argv: list[str]) -> int:
             initial_capital=args.capital,
             rebalance_threshold=args.rebalance_band,
             bars_per_year=args.bars_per_year,
+            fill_timing=fill,
         ),
         half_spread_bps=args.half_spread_bps,
         impact_coefficient=args.impact,
         commission_bps=args.commission_bps,
         commission_per_share=args.commission_per_share,
+        check_leaks=not args.no_leak_check,
     )
     started = time.perf_counter()
     result = run_audit(bars, spec, config)
     print(render_audit_report(result, markdown=args.markdown))
+    if args.html is not None:
+        args.html.write_text(render_audit_html(result), encoding="utf-8")
+        print(f"\nHTML report written to {args.html}")
     print()
     print(f"Completed in {time.perf_counter() - started:.1f}s.")
-    return 0
+    # A leak makes every number above meaningless, so fail loudly for CI.
+    return 1 if result.leaks is not None and result.leaks.findings else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -194,6 +239,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.markdown:
         print()
         print(render_markdown_table(result))
+
+    if args.html is not None:
+        args.html.write_text(study_html(result), encoding="utf-8")
+        print(f"\nHTML report written to {args.html}")
 
     return 0
 

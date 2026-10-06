@@ -33,13 +33,13 @@ removes exactly one comfortable assumption. **Every stage is scored over
 identical bars** — bars 504 to 2520, eight years — so nothing here is a
 consequence of measuring different periods.
 
-| # | Stage | Sharpe | Total return | Ann. return | Max DD | Trades | Lookback |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Naive backtest | **6.94** | +80925.7% | +131.0% | -3.1% | 2132 | 5 |
-| 2 | + point-in-time data | 0.43 | +46.7% | +4.9% | -26.4% | 1665 | 20 |
-| 3 | + slippage | 0.27 | +24.0% | +2.7% | -31.1% | 1664 | 20 |
-| 4 | + commissions | 0.26 | +23.0% | +2.6% | -31.4% | 1665 | 20 |
-| 5 | + walk-forward OOS | **-0.19** | -22.7% | -3.2% | -29.8% | 1789 | 5/5/45/30/20/20/5/5 |
+| # | Stage | Sharpe | P(edge) | Total return | Ann. return | Max DD | Trades | Lookback |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Naive backtest | **6.94** | >99.9% | +80925.7% | +131.0% | -3.1% | 2132 | 5 |
+| 2 | + point-in-time data | 0.43 | 77.8% | +46.7% | +4.9% | -26.4% | 1665 | 20 |
+| 3 | + slippage | 0.27 | 60.9% | +24.0% | +2.7% | -31.1% | 1664 | 20 |
+| 4 | + commissions | 0.26 | 59.7% | +23.0% | +2.6% | -31.4% | 1665 | 20 |
+| 5 | + walk-forward OOS | **-0.19** | 29.8% | -22.7% | -3.2% | -29.8% | 1789 | 5/5/45/30/20/20/5/5 |
 
 Reference points from the same run:
 
@@ -76,6 +76,16 @@ Nothing was tuned to rescue it.
   report. Stage 5 re-fits on each training window and scores only the window that
   follows. The chosen lookback lurches between 5 and 45 across folds — the
   in-sample optimum is not stable, which is exactly what fitting noise looks like.
+
+- **P(edge) is the probability the Sharpe is more than luck.** For stages 1
+  to 4 it is the Deflated Sharpe Ratio (Bailey and López de Prado, 2014),
+  which asks whether the Sharpe beats the best one you would expect from
+  trying that many lookbacks on pure noise, and corrects for skew and fat
+  tails. Stage 5 chose nothing on the bars it reports, so it gets the plain
+  Probabilistic Sharpe Ratio against zero. The naive rung's >99.9% is the
+  leak talking: significance computed on a backtest that reads the future
+  measures the leak. The honest rung's 29.8% says a negative Sharpe this
+  size is unremarkable for a strategy with no edge.
 
 ### It is not one lucky path
 
@@ -126,7 +136,8 @@ Everything above is printed by that command. Useful variants:
 python run_experiment.py --seeds 1         # headline table only, ~2 seconds
 python run_experiment.py --seed 42         # a different price path
 python run_experiment.py --markdown        # emit the table in Markdown
-pytest                                     # 144 tests, ~6 seconds
+python run_experiment.py --html study.html # also write the charts as a web page
+pytest                                     # 178 tests, ~6 seconds
 ```
 
 Results are deterministic: the same seed reproduces the same numbers to the last
@@ -142,15 +153,17 @@ honest-backtest audit --data examples/sample_prices.csv --strategy examples/sma_
 ```
 
 ```
-#  Stage                Sharpe  Total return  Ann. return  Max DD  Trades  fast,slow
-1  In-sample, no costs  0.10    +3.8%         +0.5%        -27.3%  35      20,100
-2  + slippage           0.08    +1.0%         +0.1%        -27.9%  35      20,100
-3  + commissions        0.08    +0.9%         +0.1%        -27.9%  35      20,100
-4  + walk-forward OOS   -0.09   -16.6%        -2.2%        -38.9%  34      50,100/50,100/20,100/...
+#  Stage                 Sharpe  P(edge)  Total return  Ann. return  Max DD  Trades  fast,slow
+1  In-sample, no costs   0.10    45.7%    +3.8%         +0.5%        -27.3%  35      20,100
+2  + slippage            0.08    43.4%    +1.0%         +0.1%        -27.9%  35      20,100
+3  + commissions         0.08    43.3%    +0.9%         +0.1%        -27.9%  35      20,100
+4  + next-bar execution  0.09    43.8%    +2.2%         +0.3%        -29.5%  27      50,100
+5  + walk-forward OOS    -0.12   36.3%    -19.9%        -2.7%        -42.2%  40      50,100/50,100/20,200/...
 
   Buy and hold, same window, costs  Sharpe   0.28
-  Walk-forward out of sample        Sharpe  -0.09   <- the only number worth quoting
-  Out-of-sample t-stat ~ -0.24: NOT distinguishable from zero.
+  Walk-forward out of sample        Sharpe  -0.12   <- the only number worth quoting
+  Out-of-sample t-stat ~ -0.35: NOT distinguishable from zero.
+  P(edge), out of sample: 36.3% (Probabilistic Sharpe Ratio against zero)
 ```
 
 `examples/sample_prices.csv` is ten years of **synthetic** prices with weekday
@@ -323,9 +336,44 @@ The one thing a real adapter would have to preserve is the cursor discipline: if
 your handler can serve a bar the engine has not reached, the guarantee is gone
 and the test suite will not catch it for you.
 
+**The look-ahead check.** The point-in-time handler stops a strategy that
+uses its accessors from seeing tomorrow, but not one that goes around them
+(reaching into the handler's private list, normalising with statistics a
+helper computed over the whole file, or keeping state between runs). So
+before running the ladder, the audit tests the definition of look-ahead
+directly: at five cut points it replaces every bar after the cut with a
+different, plausible future and replays every setting in the grid. Any
+signal at or before the cut that moves is a leak. The report then opens
+with a warning and the command exits with status 1, so it can gate CI. A
+strategy whose signals differ between two runs on identical data is
+reported as uncheckable rather than passed. The check cannot see a strategy
+that reads its own copy of the data, since the altered future never reaches
+it. `--no-leak-check` skips it; in code, `detect_look_ahead(bars, spec)`
+returns the same report.
+
+**A page to send someone.** `--html report.html` (on the study and on
+`audit`) writes a single self-contained HTML file: a Sharpe waterfall that
+starts at the in-sample headline and steps down rung by rung to the
+out-of-sample number, every rung's equity curve on a log axis against buy and
+hold, slippage and commission paid per rung, and the full table with P(edge).
+It is inline SVG and CSS with no scripts and nothing fetched, so it opens
+offline and can be attached to an email or a pull request as it is, and it
+follows the reader's light or dark setting.
+
+**When orders fill.** The synthetic study fills at the close of the bar that
+produced the signal, which assumes you can see a close and trade on it in the
+same instant. Audits default to `--fill auto`, which adds a "+ next-bar
+execution" rung: orders fill at the next bar's open when the file has real
+opens, and at the next bar's close when it only has closes (a derived open is
+just the previous close, so "next open" would quietly be the same instant).
+The walk-forward rung and buy-and-hold use the same timing. `--fill close`
+keeps the old behaviour, and `--fill next_open` or `--fill next_close` force
+one. The engine itself takes `fill_timing` on `run_backtest` and
+`LadderSettings`.
+
 ## Tests
 
-144 tests, covering the things that would invalidate the result if they were
+178 tests, covering the things that would invalidate the result if they were
 wrong rather than the things that are easy to test:
 
 ```bash
@@ -345,6 +393,10 @@ pytest
 | `test_spec.py` | The ladder runs on strategies other than momentum, with four rungs when there is no leaky twin; the built-in study is exactly the generic ladder on the momentum spec. |
 | `test_csvdata.py` | Real files load with dates and adjustment; out-of-order dates, duplicates, bad prices and a silently missing volume are refused. |
 | `test_audit.py` | The `audit` command runs end to end on a user file, strategy references resolve or fail with a reason, and the cost model is calibrated before the scored window. |
+| `test_fill_timing.py` | Next-bar fills happen exactly one bar later at that bar's open or close, a signal on the final bar never fills, and the ladder gains its next-bar rung only when asked. |
+| `test_deflated_sharpe.py` | PSR, expected maximum Sharpe and DSR against their definitions: more trials and negative skew both lower the probability, one trial makes DSR equal PSR, and every rung of a study reports one. |
+| `test_leaks.py` | The look-ahead check passes honest strategies and catches the leaky twin, a strategy reading the handler's private list, one refused by the handler, and state shared between runs; random strategies are flagged as uncheckable; a leaky audit opens with a warning and exits non-zero. |
+| `test_html_report.py` | The HTML report is self-contained (no scripts, nothing fetched), carries every rung and reference, escapes names, and is written by `--html`; every rung keeps returns for exactly the scored window. |
 
 Two real bugs were caught by these tests while writing them, which is the
 argument for having them:

@@ -21,6 +21,8 @@ import numpy as np
 from .commission import CommissionModel, PercentOfNotionalCommission, PerShareCommission
 from .data import Bar
 from .experiments import LadderResult, LadderSettings, momentum_spec, run_ladder
+from .html_report import ReportContext, render_html
+from .leaks import LeakReport, detect_look_ahead
 from .report import render_costs, render_markdown_table, render_table
 from .slippage import SlippageModel, SpreadPlusImpactSlippage
 from .spec import StrategySpec, param_names
@@ -99,6 +101,9 @@ class AuditConfig:
             equity brokers.
         commission_per_share: Per-share fee when ``commission_bps`` is unset.
         commission_minimum: Minimum per-share-model fee per order.
+        check_leaks: Before running the ladder, replay the strategy with the
+            future replaced at several points and confirm no past signal
+            changes (see :mod:`honest_backtest.leaks`).
     """
 
     settings: LadderSettings = LadderSettings()
@@ -107,6 +112,7 @@ class AuditConfig:
     commission_bps: float | None = None
     commission_per_share: float = 0.005
     commission_minimum: float = 1.0
+    check_leaks: bool = True
 
     def commission(self) -> CommissionModel:
         """Build the configured commission model."""
@@ -133,6 +139,7 @@ class AuditResult:
     spec: StrategySpec
     bars: list[Bar]
     config: AuditConfig
+    leaks: LeakReport | None = None
 
     @property
     def years_scored(self) -> float:
@@ -157,6 +164,7 @@ def run_audit(
     """Run the degradation ladder for ``spec`` on ``bars``."""
     config = config or AuditConfig()
     bars = list(bars)
+    leaks = detect_look_ahead(bars, spec) if config.check_leaks else None
     ladder = run_ladder(
         bars,
         spec,
@@ -164,7 +172,7 @@ def run_audit(
         slippage=config.slippage(bars),
         commission=config.commission(),
     )
-    return AuditResult(ladder=ladder, spec=spec, bars=bars, config=config)
+    return AuditResult(ladder=ladder, spec=spec, bars=bars, config=config, leaks=leaks)
 
 
 def _when(bar: Bar) -> str:
@@ -184,6 +192,7 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
         if abs(t) > 2.0
         else "NOT distinguishable from zero"
     )
+    leak_line = "skipped" if result.leaks is None else result.leaks.summary()
     lines = [
         f"honest-backtest audit - {result.spec.name}",
         f"  instrument          {first.symbol}",
@@ -194,6 +203,8 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
         f"  walk-forward folds  {len(ladder.folds)} "
         f"(train {cfg.train_size}, test {cfg.test_size}, non-overlapping)",
         f"  settings tried      {len(result.spec.grid)} per fit",
+        f"  next-bar fills      {cfg.fill_timing}",
+        f"  look-ahead check    {leak_line}",
         "",
         render_table(ladder, param_header=param_names(result.spec)),
         "",
@@ -206,9 +217,17 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
         f"  Walk-forward out of sample        Sharpe {honest:6.2f}"
         "   <- the only number worth quoting",
         f"  Out-of-sample t-stat ~ {t:.2f}: {verdict}.",
+        f"  P(edge), out of sample: {ladder.stages[-1].p_edge * 100:.1f}% "
+        "(Probabilistic Sharpe Ratio against zero)",
         f"  Sharpe fell monotonically at every rung: "
         f"{'yes' if ladder.is_monotone else 'NO - reported as measured'}",
     ]
+    if result.leaks is not None and result.leaks.findings:
+        lines.insert(
+            0,
+            "WARNING: this strategy's past signals change when the future does.\n"
+            "Every number below is contaminated by look-ahead; fix the leak first.\n",
+        )
     if len(result.spec.grid) > 1:
         lines.append(
             f"  The in-sample rungs picked the best of {len(result.spec.grid)} "
@@ -221,3 +240,61 @@ def render_audit_report(result: AuditResult, *, markdown: bool = False) -> str:
             render_markdown_table(ladder, param_header=param_names(result.spec)),
         ]
     return "\n".join(lines)
+
+
+def render_audit_html(result: AuditResult) -> str:
+    """Render an audit as a self-contained HTML page."""
+    ladder, cfg = result.ladder, result.config.settings
+    first = result.bars[ladder.scored_start]
+    last = result.bars[ladder.scored_end - 1]
+    t = result.honest_t_stat
+    leaks = result.leaks
+    warning = None
+    if leaks is not None and leaks.findings:
+        warning = (
+            "This strategy's past signals change when the future does. Every "
+            f"number below is contaminated by look-ahead. {leaks.findings[0].detail}."
+        )
+    scored = result.bars[ladder.scored_start - 1 : ladder.scored_end]
+    notes = [
+        f"Out-of-sample t-stat about {t:.2f}: "
+        + (
+            "distinguishable from zero at roughly the 5% level."
+            if abs(t) > 2
+            else "not distinguishable from zero."
+        ),
+        "P(edge) is the Deflated Sharpe Ratio for in-sample rungs (it discounts for "
+        f"picking the best of {len(result.spec.grid)} settings) and the "
+        "Probabilistic Sharpe Ratio against zero for the walk-forward rung.",
+        "Sharpe fell at every rung."
+        if ladder.is_monotone
+        else "Sharpe did not fall at every rung; reported as measured.",
+    ]
+    context = ReportContext(
+        title=f"Audit: {result.spec.name}",
+        subtitle=f"{first.symbol}, {_when(first)} to {_when(last)}",
+        facts=[
+            (
+                "Data",
+                f"{_when(result.bars[0])} to {_when(result.bars[-1])} "
+                f"({len(result.bars)} bars)",
+            ),
+            (
+                "Scored window",
+                f"{result.years_scored:.1f} years, identical for every rung",
+            ),
+            (
+                "Walk-forward folds",
+                f"{len(ladder.folds)} (train {cfg.train_size}, test {cfg.test_size})",
+            ),
+            ("Settings tried", f"{len(result.spec.grid)} per fit"),
+            ("Next-bar fills", cfg.fill_timing),
+            ("Look-ahead check", "skipped" if leaks is None else leaks.summary()),
+        ],
+        references=[("Buy and hold", ladder.buy_hold_sharpe)],
+        notes=notes,
+        warning=warning,
+        param_header=param_names(result.spec),
+        dates=[_when(b) for b in scored],
+    )
+    return render_html(ladder, context)
