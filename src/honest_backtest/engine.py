@@ -159,40 +159,58 @@ class Backtest:
     def run(self) -> BacktestResult:
         """Run to completion and return the result.
 
-        The outer loop advances market time exactly once per iteration. The
-        inner loop drains every event that the new bar caused, so time cannot
-        advance in the middle of a decision.
+        Each :meth:`step` advances market time exactly once and drains every
+        event the new bar caused, so time cannot advance in the middle of a
+        decision.
         """
-        while self.data.continue_backtest:
-            self.data.update_bars()
-            if not self.data.continue_backtest:
+        while self.step():
+            pass
+        return self.result()
+
+    def step(self) -> bool:
+        """Advance one bar and process every event it causes.
+
+        A live feed (see :mod:`~honest_backtest.live`) drives this same loop
+        one bar at a time, so a paper trader runs exactly the code a backtest
+        does.
+
+        Returns:
+            ``False`` once the data has run out, ``True`` otherwise.
+        """
+        if not self.data.continue_backtest:
+            return False
+        self.data.update_bars()
+        if not self.data.continue_backtest:
+            return False
+
+        while True:
+            try:
+                event = self.events.get(block=False)
+            except Empty:
                 break
 
-            while True:
-                try:
-                    event = self.events.get(block=False)
-                except Empty:
-                    break
+            self.event_counts[event.type.value] += 1
 
-                self.event_counts[event.type.value] += 1
+            if isinstance(event, MarketEvent):
+                # Orders held over from the previous bar fill first, so
+                # this bar's snapshot already reflects them.
+                for fill in self.execution.fill_pending():
+                    self.event_counts[fill.type.value] += 1
+                    self.portfolio.on_fill(fill)
+                self.portfolio.on_market(event)
+                self.strategy.calculate_signals(event)
+            elif isinstance(event, SignalEvent):
+                self.portfolio.on_signal(event)
+            elif isinstance(event, OrderEvent):
+                self.execution.execute_order(event)
+            elif isinstance(event, FillEvent):
+                self.portfolio.on_fill(event)
+            else:  # pragma: no cover - defensive
+                raise TypeError(f"unhandled event type: {event!r}")
+        return True
 
-                if isinstance(event, MarketEvent):
-                    # Orders held over from the previous bar fill first, so
-                    # this bar's snapshot already reflects them.
-                    for fill in self.execution.fill_pending():
-                        self.event_counts[fill.type.value] += 1
-                        self.portfolio.on_fill(fill)
-                    self.portfolio.on_market(event)
-                    self.strategy.calculate_signals(event)
-                elif isinstance(event, SignalEvent):
-                    self.portfolio.on_signal(event)
-                elif isinstance(event, OrderEvent):
-                    self.execution.execute_order(event)
-                elif isinstance(event, FillEvent):
-                    self.portfolio.on_fill(event)
-                else:  # pragma: no cover - defensive
-                    raise TypeError(f"unhandled event type: {event!r}")
-
+    def result(self) -> BacktestResult:
+        """Everything processed so far, as a :class:`BacktestResult`."""
         return BacktestResult(
             timestamps=self.portfolio.timestamps,
             equity=self.portfolio.equity_curve,
