@@ -32,3 +32,6 @@ htmlcov/
 # Generated output
 *.log
 results/
+
+# Docs build
+site/

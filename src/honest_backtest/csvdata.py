@@ -113,88 +113,118 @@ def load_csv_bars(
     """
     path = Path(path)
     symbol = symbol or path.stem.upper()
-
     with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames is None:
-            raise CSVFormatError(f"{path} is empty")
-        columns = {_normalise(name): name for name in reader.fieldnames}
-
-        date_col = _find(columns, _DATE_COLUMNS)
-        close_col = _find(columns, ("close",))
-        if date_col is None or close_col is None:
-            raise CSVFormatError(
-                f"{path} needs a date column and a close column; "
-                f"found {reader.fieldnames}"
-            )
-        open_col = _find(columns, ("open",))
-        high_col = _find(columns, ("high",))
-        low_col = _find(columns, ("low",))
-        volume_col = _find(columns, ("volume",))
-        adj_col = _find(columns, _ADJ_CLOSE_COLUMNS) if use_adjusted else None
-
-        if volume_col is None and default_volume is None:
-            raise CSVFormatError(
-                f"{path} has no volume column. Volume drives the market impact "
-                "model; pass default_volume (or --default-volume) to assume one."
-            )
-        have_ohlc = open_col is not None and high_col is not None and low_col is not None
-
-        bars: list[Bar] = []
-        previous_time: datetime | None = None
-        previous_close: float | None = None
-        for line, row in enumerate(reader, start=2):
-            when = _parse_time(row[date_col], line)
-            if previous_time is not None and when <= previous_time:
-                raise CSVFormatError(
-                    f"line {line}: date {when.date()} is not after "
-                    f"{previous_time.date()}. "
-                    "Rows must be sorted oldest first with no duplicates."
-                )
-
-            close = _parse_price(row[close_col], close_col, line)
-            factor = 1.0
-            if adj_col is not None:
-                factor = _parse_price(row[adj_col], adj_col, line) / close
-
-            if have_ohlc:
-                o = _parse_price(row[open_col], open_col, line)
-                h = _parse_price(row[high_col], high_col, line)
-                lo = _parse_price(row[low_col], low_col, line)
-            else:
-                o = previous_close / factor if previous_close is not None else close
-                h, lo = max(o, close), min(o, close)
-
-            if volume_col is not None:
-                try:
-                    volume = float(row[volume_col])
-                except ValueError as exc:
-                    raise CSVFormatError(
-                        f"line {line}: volume is not a number: {row[volume_col]!r}"
-                    ) from exc
-                if not math.isfinite(volume) or volume < 0:
-                    raise CSVFormatError(f"line {line}: volume must be non-negative")
-            else:
-                volume = float(default_volume)
-
-            adj_close = close * factor
-            bars.append(
-                Bar(
-                    timestamp=len(bars),
-                    symbol=symbol,
-                    open=o * factor,
-                    high=h * factor,
-                    low=lo * factor,
-                    close=adj_close,
-                    volume=volume,
-                    time=when,
-                )
-            )
-            previous_time = when
-            previous_close = adj_close
-
+        bars = read_csv_rows(
+            handle,
+            symbol,
+            source=str(path),
+            use_adjusted=use_adjusted,
+            default_volume=default_volume,
+        )
     if len(bars) < 2:
         raise CSVFormatError(f"{path} has {len(bars)} rows; need at least 2")
+    return bars
+
+
+def read_csv_rows(
+    handle: Iterable[str],
+    symbol: str,
+    *,
+    source: str = "the file",
+    use_adjusted: bool = True,
+    default_volume: float | None = None,
+) -> list[Bar]:
+    """Parse CSV text into bars, with every check :func:`load_csv_bars` makes.
+
+    The building block of :func:`load_csv_bars`, also used to read a file
+    that is still being written (see :class:`~honest_backtest.live.CsvTailFeed`).
+
+    Args:
+        handle: Lines of CSV text, header first.
+        symbol: Name stamped on every bar.
+        source: How to name the input in error messages.
+        use_adjusted: As for :func:`load_csv_bars`.
+        default_volume: As for :func:`load_csv_bars`.
+
+    Returns:
+        Bars in ascending time order, possibly none.
+    """
+    reader = csv.DictReader(handle)
+    if reader.fieldnames is None:
+        raise CSVFormatError(f"{source} is empty")
+    columns = {_normalise(name): name for name in reader.fieldnames}
+
+    date_col = _find(columns, _DATE_COLUMNS)
+    close_col = _find(columns, ("close",))
+    if date_col is None or close_col is None:
+        raise CSVFormatError(
+            f"{source} needs a date column and a close column; found {reader.fieldnames}"
+        )
+    open_col = _find(columns, ("open",))
+    high_col = _find(columns, ("high",))
+    low_col = _find(columns, ("low",))
+    volume_col = _find(columns, ("volume",))
+    adj_col = _find(columns, _ADJ_CLOSE_COLUMNS) if use_adjusted else None
+
+    if volume_col is None and default_volume is None:
+        raise CSVFormatError(
+            f"{source} has no volume column. Volume drives the market impact "
+            "model; pass default_volume (or --default-volume) to assume one."
+        )
+    have_ohlc = open_col is not None and high_col is not None and low_col is not None
+
+    bars: list[Bar] = []
+    previous_time: datetime | None = None
+    previous_close: float | None = None
+    for line, row in enumerate(reader, start=2):
+        when = _parse_time(row[date_col], line)
+        if previous_time is not None and when <= previous_time:
+            raise CSVFormatError(
+                f"line {line}: date {when.date()} is not after "
+                f"{previous_time.date()}. "
+                "Rows must be sorted oldest first with no duplicates."
+            )
+
+        close = _parse_price(row[close_col], close_col, line)
+        factor = 1.0
+        if adj_col is not None:
+            factor = _parse_price(row[adj_col], adj_col, line) / close
+
+        if have_ohlc:
+            o = _parse_price(row[open_col], open_col, line)
+            h = _parse_price(row[high_col], high_col, line)
+            lo = _parse_price(row[low_col], low_col, line)
+        else:
+            o = previous_close / factor if previous_close is not None else close
+            h, lo = max(o, close), min(o, close)
+
+        if volume_col is not None:
+            try:
+                volume = float(row[volume_col])
+            except ValueError as exc:
+                raise CSVFormatError(
+                    f"line {line}: volume is not a number: {row[volume_col]!r}"
+                ) from exc
+            if not math.isfinite(volume) or volume < 0:
+                raise CSVFormatError(f"line {line}: volume must be non-negative")
+        else:
+            volume = float(default_volume)
+
+        adj_close = close * factor
+        bars.append(
+            Bar(
+                timestamp=len(bars),
+                symbol=symbol,
+                open=o * factor,
+                high=h * factor,
+                low=lo * factor,
+                close=adj_close,
+                volume=volume,
+                time=when,
+            )
+        )
+        previous_time = when
+        previous_close = adj_close
     return bars
 
 
