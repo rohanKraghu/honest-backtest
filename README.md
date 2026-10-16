@@ -1,8 +1,10 @@
 # honest-backtest
 
-An event-driven backtesting framework built to demonstrate a negative result: that
-a strategy which looks outstanding under the assumptions most backtests make
-without saying so is worthless once those assumptions are removed one at a time.
+An event-driven backtesting framework, and a study of what happens to a
+strategy's Sharpe ratio as the assumptions most backtests make without saying
+so are removed one at a time. A momentum strategy that reports a Sharpe of 6.94
+with a look-ahead bug earns about 0.22 when tested honestly: a small, real edge
+that no single eight-year backtest can tell apart from zero.
 
 The headline output is the rate at which a return figure
 decays when you stop lying to yourself.
@@ -50,8 +52,8 @@ Naive backtest (stage 1)                      Sharpe   6.94   <- what a careless
 Honest out-of-sample (stage 5)                Sharpe  -0.19   <- the only number worth quoting
 ```
 
-The honest answer is that this strategy does not work, and nothing was tuned
-to rescue it.
+On this path the honest answer is negative. Across 200 paths (below) it is a
+small positive edge, and this path is an unlucky one.
 
 ### Reading the table
 
@@ -59,8 +61,9 @@ to rescue it.
   stage 2 is a fall from 6.94 to 0.43, and no money changed hands to cause it.
   Only the alignment of the signal changed.
 - **Stage 1 is impossible, and that is the tell.** A cost-free trader who knows
-  the hidden state exactly can only achieve Sharpe 1.30 on this data. Stage 1
-  reports 6.94, five times the theoretical maximum, with a 3.1% maximum drawdown
+  the hidden state exactly and goes fully long or short on its sign gets Sharpe
+  1.30 on this data (sizing by the state itself does a little better, about
+  1.5). Stage 1 reports 6.94, more than four times that, with a 3.1% maximum drawdown
   over eight years. When a backtest reports a number the data cannot support, the
   backtest is reading its own answer. Implausibly smooth equity curves are
   evidence of a bug, not of skill.
@@ -71,7 +74,7 @@ to rescue it.
   of notional traded. The explicit invoice is an order of magnitude smaller than
   the implicit cost. Backtests that model commissions and ignore slippage have
   modelled the smaller problem.
-- **Walk-forward is what turns a marginal result into a negative one.** Stages 2
+- **Walk-forward takes the rest.** Stages 2
   to 4 choose the lookback that performed best over the very window they then
   report. Stage 5 re-fits on each training window and scores only the window that
   follows. The chosen lookback lurches between 5 and 45 across folds; the
@@ -90,30 +93,47 @@ to rescue it.
 ### It is not one lucky path
 
 A single seed proves nothing: any ladder can be produced by picking the path that
-produces it. The same study across 12 independent price paths:
+produces it. The same study across 200 independent price paths
+(`python run_experiment.py --seeds 200 --fast --workers 4`, under a minute on
+four cores):
 
 ```
 Stage                       mean   stdev       t
 ------------------------ ------- ------- -------
-Naive backtest              6.91    0.20  119.95
-+ point-in-time data        0.57    0.38    5.23
-+ slippage                  0.40    0.34    4.03
-+ commissions               0.38    0.34    3.89
-+ walk-forward OOS          0.12    0.49    0.86
+Naive backtest              6.94    0.21  473.94
++ point-in-time data        0.72    0.34   30.32
++ slippage                  0.52    0.34   21.58
++ commissions               0.50    0.34   20.91
++ walk-forward OOS          0.22    0.41    7.63
 
-Verdict on the honest stage: NOT distinguishable from zero (|t| = 0.86).
-Sharpe fell at every rung on 11/12 paths.
+Verdict on the honest stage: distinguishable from zero at the 5% level (|t| = 7.63).
+Sharpe fell at every rung on 183/200 paths.
 ```
 
-Two things worth being explicit about:
+What that says:
 
-1. The naive backtest's t-statistic of **120** is the point. It is overwhelmingly
-   "significant" and completely fake. Statistical significance computed on a
-   contaminated backtest measures the contamination.
-2. **The ladder is monotone on 11 of 12 paths, not 12 of 12.** One path breaks it.
-   That is reported rather than dropped, because dropping it would be the same
-   class of error the project is about. The degradation is a strong tendency, not
-   a theorem.
+1. **The honest strategy has a real but small edge.** Its walk-forward Sharpe
+   averages 0.22 (standard error 0.03), about 15% of what the oracle gets
+   (1.48 on average across these paths). The headline path's -0.19 is at the
+   18th percentile.
+2. **No single backtest can see it.** One path's walk-forward Sharpe varies by
+   0.41 from path to path, nearly twice the edge, and 28% of paths come out
+   negative. Anyone with one price history, which is everyone with real data,
+   cannot tell this strategy from no strategy.
+3. **Choosing the lookback in-sample is worth 0.28 of Sharpe on average** (stage
+   4 minus stage 5), and walk-forward came in below the in-sample figure on 92%
+   of paths.
+4. The naive backtest's t-statistic of **474** is overwhelmingly "significant"
+   and completely fake. Statistical significance computed on a contaminated
+   backtest measures the contamination.
+5. **The ladder falls at every rung on 183 of 200 paths, not all of them.** The
+   exceptions are reported rather than dropped, because dropping them would be
+   the same class of error the project is about.
+
+The default run, `python run_experiment.py`, sweeps 12 paths. Those 12 happen to
+average 0.12 on the honest stage, not distinguishable from zero; an earlier
+version of this README concluded from them that the strategy does not work. The
+200-path run above is the one to read.
 
 The default seed is `20260921`, the date the project was written, fixed before
 any results were seen. The multi-seed sweep exists so the claim does not rest on
@@ -130,10 +150,12 @@ pip install -r requirements.txt
 python run_experiment.py
 ```
 
-Everything above is printed by that command. Useful variants:
+That prints the headline table and a 12-path sweep; the 200-path sweep is the
+`--seeds 200` variant below. Useful variants:
 
 ```bash
 python run_experiment.py --seeds 1         # headline table only, ~2 seconds
+python run_experiment.py --seeds 200 --fast --workers 4  # the 200-path sweep
 python run_experiment.py --seed 42         # a different price path
 python run_experiment.py --markdown        # emit the table in Markdown
 python run_experiment.py --html study.html # also write the charts as a web page
@@ -422,7 +444,7 @@ Running the bug is more convincing than describing it.
 src/honest_backtest/
 ├── events.py        MarketEvent → SignalEvent → OrderEvent → FillEvent (frozen dataclasses)
 ├── data.py          DataHandler interface; point-in-time handler; the deliberate leak
-├── synthetic.py     GBM + injected weak signal; the oracle ceiling
+├── synthetic.py     GBM + injected weak signal; the oracle benchmark
 ├── strategy.py      Strategy interface; momentum; the leaky variant; buy-and-hold
 ├── slippage.py      SlippageModel: Zero / FixedBps / SpreadPlusImpact / PermanentImpact
 ├── commission.py    CommissionModel: Zero / PerShare / PercentOfNotional
@@ -462,21 +484,23 @@ P_t = P_{t-1}·exp(r_t)
 ```
 
 `α = 0.115` is the per-bar information ratio available to an observer who knows
-`s` exactly (an annualised ceiling of about 1.3). The state is latent: strategies
+`s` exactly (about 1.8 annualised in theory for a trader sized by `s`; the printed
+oracle takes only the sign of `s` and averages about 1.5 across paths, 1.30 on
+the headline path). The state is latent: strategies
 never see it and must infer it from past returns, where it sits under noise
 roughly `1/α` times larger.
 
 **This is a demonstration harness, not a performance claim.** No conclusion about
 any real market follows from it. Synthetic data was chosen because it makes the
 ground truth knowable: the Sharpe a backtest *reports* can be compared against
-the Sharpe that is actually *there*, stage 1's 6.94 against a ceiling of 1.30.
+the Sharpe that is actually *there*, stage 1's 6.94 against an oracle of 1.30.
 With real data you can never separate "my method is biased" from "the market
 really did that".
 
 `α` was chosen so the degradation is visible: large enough that the injected edge
 is real, small enough that frictions and honest validation can destroy it. That
 choice is disclosed here, and the oracle Sharpe is printed on
-every run so the honest number can be read against the ceiling instead of against
+every run so the honest number can be read against it instead of against
 zero.
 
 ### Using real data instead
