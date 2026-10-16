@@ -1,11 +1,11 @@
 # honest-backtest
 
 An event-driven backtester built to demonstrate a negative result: a strategy
-that looks outstanding under the assumptions most backtests quietly make is
+that looks outstanding under the assumptions most backtests make without saying so is
 worthless once those assumptions are removed one at a time.
 
-The headline output is not a return figure. It is the rate at which a return
-figure decays when you stop lying to yourself.
+The headline output is the rate at which a return figure
+decays when you stop lying to yourself.
 
 ```text
 #  Stage                 Sharpe  P(edge)
