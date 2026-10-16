@@ -1,8 +1,8 @@
 # honest-backtest
 
-An event-driven backtester built to demonstrate a negative result: a strategy
-that looks outstanding under the assumptions most backtests make without saying so is
-worthless once those assumptions are removed one at a time.
+An event-driven backtester, and a study of what happens to a strategy's Sharpe
+ratio as the assumptions most backtests make without saying so are removed one
+at a time.
 
 The headline output is the rate at which a return figure
 decays when you stop lying to yourself.
@@ -17,8 +17,9 @@ decays when you stop lying to yourself.
 ```
 
 Same strategy, same price path, every stage scored over the same eight years.
-Look-ahead bias alone accounts for most of the apparent edge, and the honest
-out-of-sample answer is that this strategy does not work. The full write-up of
+Look-ahead bias alone accounts for most of the apparent edge. Across 200 price
+paths the honest out-of-sample Sharpe averages 0.22: a small real edge, too
+small for any single eight-year backtest to tell apart from zero. The full write-up of
 that study is in the
 [README](https://github.com/rohanKraghu/honest-backtest#readme).
 
