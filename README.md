@@ -1,11 +1,11 @@
 # honest-backtest
 
 An event-driven backtesting framework built to demonstrate a negative result: that
-a strategy which looks outstanding under the assumptions most backtests quietly
-make is worthless once those assumptions are removed one at a time.
+a strategy which looks outstanding under the assumptions most backtests make
+without saying so is worthless once those assumptions are removed one at a time.
 
-The headline output is not a return figure. It is the rate at which a return
-figure decays when you stop lying to yourself.
+The headline output is the rate at which a return figure
+decays when you stop lying to yourself.
 
 ---
 
@@ -29,8 +29,8 @@ measures the damage.
 ## The headline result
 
 Same strategy, same price path, same random seed, at every stage. Each row
-removes exactly one comfortable assumption. **Every stage is scored over
-identical bars** — bars 504 to 2520, eight years — so nothing here is a
+removes exactly one comfortable assumption. Every stage is scored over
+identical bars (bars 504 to 2520, eight years), so nothing here is a
 consequence of measuring different periods.
 
 | # | Stage | Sharpe | P(edge) | Total return | Ann. return | Max DD | Trades | Lookback |
@@ -50,8 +50,8 @@ Naive backtest (stage 1)                      Sharpe   6.94   <- what a careless
 Honest out-of-sample (stage 5)                Sharpe  -0.19   <- the only number worth quoting
 ```
 
-**The honest answer is that this strategy does not work.** That is the finding.
-Nothing was tuned to rescue it.
+The honest answer is that this strategy does not work, and nothing was tuned
+to rescue it.
 
 ### Reading the table
 
@@ -65,16 +65,16 @@ Nothing was tuned to rescue it.
   backtest is reading its own answer. Implausibly smooth equity curves are
   evidence of a bug, not of skill.
 - **Commissions barely matter; slippage does.** Stage 3 to stage 4 costs only
-  0.01 of Sharpe. That is not a bug in the fee model — measured over the run, a
-  per-share commission of half a cent works out to **0.31bp of traded notional**
-  against **5.74bp of spread-plus-impact slippage**, an 18x difference on $462M
+  0.01 of Sharpe. That is not a bug in the fee model: measured over the run, a
+  per-share commission of half a cent works out to 0.31bp of traded notional
+  against 5.74bp of spread-plus-impact slippage, an 18x difference on $462M
   of notional traded. The explicit invoice is an order of magnitude smaller than
   the implicit cost. Backtests that model commissions and ignore slippage have
   modelled the smaller problem.
 - **Walk-forward is what turns a marginal result into a negative one.** Stages 2
   to 4 choose the lookback that performed best over the very window they then
   report. Stage 5 re-fits on each training window and scores only the window that
-  follows. The chosen lookback lurches between 5 and 45 across folds — the
+  follows. The chosen lookback lurches between 5 and 45 across folds; the
   in-sample optimum is not stable, which is exactly what fitting noise looks like.
 
 - **P(edge) is the probability the Sharpe is more than luck.** For stages 1
@@ -115,7 +115,7 @@ Two things worth being explicit about:
    class of error the project is about. The degradation is a strong tendency, not
    a theorem.
 
-The default seed is `20260921` — the date the project was written, fixed before
+The default seed is `20260921`, the date the project was written, fixed before
 any results were seen. The multi-seed sweep exists so the claim does not rest on
 that choice.
 
@@ -209,8 +209,8 @@ fast path).
 
 ## Paper trading
 
-The claim that a strategy here is live-tradeable as written is tested, not just
-stated. `honest-backtest paper` follows a price file that something else appends
+`honest-backtest paper` tests the claim that a strategy here is live-tradeable
+as written. It follows a price file that something else appends
 to (a scheduled download, say) and trades each new row with the audit's spread,
 impact and commission model:
 
@@ -384,10 +384,10 @@ The outer loop advances market time exactly once per iteration; the inner loop
 drains every event the new bar caused before time moves again. A component can
 only ever act on events it has actually received.
 
-This is slower than a vectorised backtest — about **26 ms per thousand bars**,
+This is slower than a vectorised backtest: about 26 ms per thousand bars,
 or roughly 39,000 events per second, where the pandas equivalent is
-sub-millisecond. That is the trade, and it buys two things. Look-ahead bias becomes an architectural impossibility rather
-than a convention a careless `.shift()` can break; and the same `Strategy` object
+sub-millisecond. In exchange, look-ahead bias becomes an architectural impossibility rather
+than a convention a careless `.shift()` can break, and the same `Strategy` object
 runs on a live feed without modification, because it consumes bars one at a
 time (see [Paper trading](#paper-trading)).
 
@@ -462,28 +462,28 @@ P_t = P_{t-1}·exp(r_t)
 ```
 
 `α = 0.115` is the per-bar information ratio available to an observer who knows
-`s` exactly — an annualised ceiling of about 1.3. The state is latent: strategies
+`s` exactly (an annualised ceiling of about 1.3). The state is latent: strategies
 never see it and must infer it from past returns, where it sits under noise
 roughly `1/α` times larger.
 
 **This is a demonstration harness, not a performance claim.** No conclusion about
 any real market follows from it. Synthetic data was chosen because it makes the
-ground truth knowable. Because the size of the injected edge is known, the Sharpe a backtest *reports* can be compared against
-the Sharpe that is actually *there* — stage 1's 6.94 against a ceiling of 1.30.
+ground truth knowable: the Sharpe a backtest *reports* can be compared against
+the Sharpe that is actually *there*, stage 1's 6.94 against a ceiling of 1.30.
 With real data you can never separate "my method is biased" from "the market
 really did that".
 
 `α` was chosen so the degradation is visible: large enough that the injected edge
 is real, small enough that frictions and honest validation can destroy it. That
-choice is disclosed here rather than buried, and the oracle Sharpe is printed on
+choice is disclosed here, and the oracle Sharpe is printed on
 every run so the honest number can be read against the ceiling instead of against
 zero.
 
 ### Using real data instead
 
 For a CSV, use `load_csv_bars` or the `audit` command above. Beyond files,
-`DataHandler` is an abstract base class with four methods — `update_bars`,
-`get_latest_bars`, `current_bar`, `latest_closes` — none of which require random
+`DataHandler` is an abstract base class with four methods (`update_bars`,
+`get_latest_bars`, `current_bar`, `latest_closes`), none of which require random
 access to the future. A database cursor or a live websocket feed can satisfy it
 too, and the engine, strategies, portfolio and execution handler need no
 changes.
@@ -537,7 +537,7 @@ produced the signal, which assumes you can see a close and trade on it in the
 same instant. Audits default to `--fill auto`, which adds a "+ next-bar
 execution" rung: orders fill at the next bar's open when the file has real
 opens, and at the next bar's close when it only has closes (a derived open is
-just the previous close, so "next open" would quietly be the same instant).
+just the previous close, so "next open" would in fact be the same instant).
 The walk-forward rung and buy-and-hold use the same timing. `--fill close`
 keeps the old behaviour, and `--fill next_open` or `--fill next_close` force
 one. The engine itself takes `fill_timing` on `run_backtest` and
@@ -647,13 +647,13 @@ cost; `BacktestResult.unfilled_quantity` reports how much.
 
 **A 5% no-trade band.** Without a band, a continuous target weight trades every
 bar and the result is dominated by dust. Real desks use a band. The value is a
-judgement call, and it materially affects the cost figures — turnover runs around
+judgement call, and it materially affects the cost figures; turnover runs around
 44x per year even with it.
 
 **Costs land in the following period's return.** The equity snapshot is taken
 when a bar arrives, before that bar's own fills, so a trade's cost shows up in
 the next period. This is the correct attribution, and it means the last snapshot
-lags the blotter by one fill — pinned by a test so nobody "fixes" it later and
+lags the blotter by one fill. A test pins this so nobody "fixes" it later and
 silently shifts every cost by one period.
 
 **Temporary impact by default.** The headline slippage model has a square-root
