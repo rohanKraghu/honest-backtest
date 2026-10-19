@@ -1,5 +1,5 @@
 site_name: honest-backtest
-site_description: An event-driven backtester built to demonstrate why backtests lie.
+site_description: An event-driven backtester that measures how much each common backtest shortcut inflates a strategy's Sharpe ratio.
 site_url: https://rohankraghu.github.io/honest-backtest/
 repo_url: https://github.com/rohanKraghu/honest-backtest
 repo_name: rohanKraghu/honest-backtest
