@@ -4,7 +4,7 @@ The package's name on PyPI is `honest-backtester` (the name
 `honest-backtest` was already taken there). The import name is
 `honest_backtest` and the command is `honest-backtest`.
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-19)
 
 The first release.
 

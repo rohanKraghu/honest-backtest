@@ -2,8 +2,12 @@
 
 Nothing is published until a GitHub release is published. Then
 `.github/workflows/release.yml` runs the tests, checks the tag against the
-package version, uploads the package to PyPI and deploys the docs site to
-GitHub Pages.
+package version and uploads the package to PyPI.
+
+The docs are not deployed to GitHub Pages: a Pages site for this repository
+would take over https://rohankraghu.github.io/honest-backtest/, which is the
+write-up page on the personal site. They are read from the `docs` folder on
+GitHub, and `mkdocs serve` shows them locally.
 
 ## One-time setup
 
@@ -14,8 +18,6 @@ GitHub Pages.
 2. **GitHub environments.** In the repository's *Settings > Environments*,
    create `pypi` (optionally with yourself as a required reviewer, so every
    upload waits for your click).
-3. **GitHub Pages.** In *Settings > Pages*, set *Source* to *GitHub Actions*.
-   The site will be at https://rohankraghu.github.io/honest-backtest/.
 
 ## Each release
 
