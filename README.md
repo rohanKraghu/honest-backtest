@@ -162,7 +162,7 @@ python run_experiment.py --html study.html # also write the charts as a web page
 python run_experiment.py --json study.json # also write every number as JSON
 python run_experiment.py --config examples/study.json   # settings from a file
 python run_experiment.py --fast --workers 4  # same numbers, about 8 seconds
-pytest                                     # 347 tests, ~40 seconds
+pytest                                     # 350 tests, ~40 seconds
 ```
 
 Results are deterministic: the same seed reproduces the same numbers to the last
@@ -460,7 +460,7 @@ src/honest_backtest/
 ├── walkforward.py   Rolling / anchored train-test splits; combinatorial purged CV splits
 ├── spec.py          StrategySpec: builder + parameter grid + warm-up
 ├── experiments.py   The generic ladder, the five-stage synthetic study, CPCV runs
-├── csvdata.py       Real price files into bars, with order and adjustment checks
+├── csvdata.py       CSV, Parquet and Yahoo prices into bars, with order and adjustment checks
 ├── audit.py         The ladder on your own strategy and data
 ├── leaks.py         The look-ahead check: replace the future, compare the past
 ├── report.py        Table rendering
@@ -505,7 +505,12 @@ zero.
 
 ### Using real data instead
 
-For a CSV, use `load_csv_bars` or the `audit` command above. Beyond files,
+For a CSV, use `load_csv_bars` or the `audit` command above. A `.parquet` file
+works the same way, in Python or as `--data`, with the `parquet` extra
+(`pip install "honest-backtester[parquet]"`). With the `yfinance` extra,
+`load_yfinance_bars("SPY", "2015-01-01")` downloads daily bars from Yahoo
+Finance. Both go through the same parser as a CSV, so they get the same order
+and adjustment checks, and pandas never reaches the engine. Beyond files,
 `DataHandler` is an abstract base class with four methods (`update_bars`,
 `get_latest_bars`, `current_bar`, `latest_closes`), none of which require random
 access to the future. A database cursor or a live websocket feed can satisfy it
@@ -569,7 +574,7 @@ one. The engine itself takes `fill_timing` on `run_backtest` and
 
 ## Tests
 
-347 tests, covering the things that would invalidate the result if they were
+350 tests, covering the things that would invalidate the result if they were
 wrong rather than the things that are easy to test:
 
 ```bash
@@ -588,6 +593,7 @@ pytest
 | `test_cli.py` | The documented one-line command actually runs and prints the table, including the synthetic-data disclaimer; `--fast` and `--workers` print the same report. |
 | `test_spec.py` | The ladder runs on strategies other than momentum, with four rungs when there is no leaky twin; the built-in study is exactly the generic ladder on the momentum spec. |
 | `test_csvdata.py` | Real files load with dates and adjustment; out-of-order dates, duplicates, bad prices and a silently missing volume are refused. |
+| `test_loaders.py` | A Parquet file and a Yahoo download give exactly the bars the same CSV gives, and a Parquet file gets the same checks. |
 | `test_audit.py` | The `audit` command runs end to end on a user file, strategy references resolve or fail with a reason, and the cost model is calibrated before the scored window. |
 | `test_fill_timing.py` | Next-bar fills happen exactly one bar later at that bar's open or close, a signal on the final bar never fills, and the ladder gains its next-bar rung only when asked. |
 | `test_deflated_sharpe.py` | PSR, expected maximum Sharpe and DSR against their definitions: more trials and negative skew both lower the probability, one trial makes DSR equal PSR, and every rung of a study reports one. |
@@ -749,12 +755,13 @@ Sizes are rough: S is a few hours, M a day or two, L longer.
   out-of-sample Sharpe across purged, embargoed folds.
 - Config files (`--config`, JSON or YAML) and machine-readable results
   (`--json`).
+- Parquet input (`.parquet` files, the `parquet` extra) and an optional
+  Yahoo Finance loader (`load_yfinance_bars`, the `yfinance` extra).
 
 **Planned**
 
 | Item | What it adds | Size |
 | --- | --- | --- |
-| Parquet input and an optional yfinance loader | More ways in besides CSV | S |
 | First PyPI release and a live docs site | `pip install honest-backtester`, once the name is settled | S |
 
 ## License

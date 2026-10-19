@@ -1,4 +1,4 @@
-# Publishes to PyPI and deploys the docs site, and runs only when a GitHub
+# Publishes to PyPI, and runs only when a GitHub
 # release is published. RELEASING.md lists the one-time setup it needs.
 name: Release
 
@@ -45,24 +45,3 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
-  docs:
-    needs: pypi
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: python -m pip install -e ".[docs]"
-      - run: mkdocs build --strict
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site/
-      - id: deploy
-        uses: actions/deploy-pages@v4

@@ -57,8 +57,12 @@ honest-backtest audit --data examples/sample_prices.csv \
 from honest_backtest import load_csv_bars
 from honest_backtest.audit import AuditConfig, load_spec, render_audit_report, run_audit
 
-bars = load_csv_bars("prices.csv")
+bars = load_csv_bars("prices.csv")  # or a .parquet file
 spec = load_spec("my_strategy.py")
 result = run_audit(bars, spec, AuditConfig())
 print(render_audit_report(result))
 ```
+
+Parquet files need `pip install "honest-backtester[parquet]"`. To download
+prices from Yahoo Finance instead, install the `yfinance` extra and use
+`load_yfinance_bars("SPY", "2015-01-01")` in place of `load_csv_bars`.

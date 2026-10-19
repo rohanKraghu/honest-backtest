@@ -1,4 +1,4 @@
-"""Loading real price history from CSV files.
+"""Loading real price history from CSV and Parquet files, or from Yahoo Finance.
 
 The engine never sees a file: it replays a list of :class:`~honest_backtest.data.Bar`
 through the point-in-time handler, exactly as it does for synthetic data. This
@@ -22,6 +22,7 @@ are wrong, and neither is visible in a results table:
 from __future__ import annotations
 
 import csv
+import io
 import math
 from collections.abc import Iterable
 from datetime import date, datetime
@@ -87,6 +88,9 @@ def load_csv_bars(
 ) -> list[Bar]:
     """Read a daily (or any regular) OHLCV file into a list of bars.
 
+    A ``.parquet`` or ``.pq`` file is read the same way, column for column,
+    and needs the ``parquet`` extra (``pip install honest-backtester[parquet]``).
+
     Column names are matched case-insensitively. A date column and a close
     column are required; open, high, low, volume and an adjusted close are
     used when present. With only closes, open/high/low are derived from
@@ -94,7 +98,7 @@ def load_csv_bars(
     does for synthetic data.
 
     Args:
-        path: CSV file to read.
+        path: CSV or Parquet file to read.
         symbol: Name stamped on every bar. Defaults to the file's stem.
         use_adjusted: If the file has an adjusted-close column, scale open,
             high, low and close by ``adj_close / close`` so splits and
@@ -113,7 +117,11 @@ def load_csv_bars(
     """
     path = Path(path)
     symbol = symbol or path.stem.upper()
-    with path.open(newline="", encoding="utf-8-sig") as handle:
+    if path.suffix.lower() in (".parquet", ".pq"):
+        handle = _parquet_as_csv(path)
+    else:
+        handle = path.open(newline="", encoding="utf-8-sig")
+    with handle:
         bars = read_csv_rows(
             handle,
             symbol,
@@ -123,6 +131,75 @@ def load_csv_bars(
         )
     if len(bars) < 2:
         raise CSVFormatError(f"{path} has {len(bars)} rows; need at least 2")
+    return bars
+
+
+def _parquet_as_csv(path: Path) -> io.StringIO:
+    """Turn a Parquet file into CSV text, so it goes through the same checks."""
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise ImportError(
+            "reading Parquet needs pyarrow: pip install honest-backtester[parquet]"
+        ) from exc
+    rows = pq.read_table(path).to_pylist()
+    text = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(text, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(
+            {k: "" if v is None else str(v) for k, v in row.items()} for row in rows
+        )
+    text.seek(0)
+    return text
+
+
+def load_yfinance_bars(
+    ticker: str,
+    start: str | None = None,
+    end: str | None = None,
+    *,
+    use_adjusted: bool = True,
+) -> list[Bar]:
+    """Download daily bars for one ticker from Yahoo Finance.
+
+    Needs the ``yfinance`` extra (``pip install honest-backtester[yfinance]``)
+    and a network connection. The download goes through the same parser and
+    checks as :func:`load_csv_bars`, and dates lose their time zone so they
+    line up with bars read from files.
+
+    Args:
+        ticker: Yahoo symbol, for example ``"SPY"``.
+        start: First date, ``YYYY-MM-DD``. ``None`` means as far back as Yahoo goes.
+        end: Day after the last date, ``YYYY-MM-DD``. ``None`` means today.
+        use_adjusted: As for :func:`load_csv_bars`.
+
+    Returns:
+        Bars in ascending time order.
+
+    Raises:
+        CSVFormatError: If Yahoo returns fewer than 2 rows or bad values.
+    """
+    try:
+        import yfinance
+    except ImportError as exc:
+        raise ImportError(
+            "downloading from Yahoo needs yfinance: "
+            "pip install honest-backtester[yfinance]"
+        ) from exc
+    kwargs = {"start": start, "end": end} if start or end else {"period": "max"}
+    frame = yfinance.Ticker(ticker).history(auto_adjust=False, **kwargs)
+    if getattr(frame.index, "tz", None) is not None:
+        frame.index = frame.index.tz_localize(None)
+    source = f"Yahoo Finance data for {ticker}"
+    bars = read_csv_rows(
+        io.StringIO(frame.to_csv()),
+        ticker.upper(),
+        source=source,
+        use_adjusted=use_adjusted,
+    )
+    if len(bars) < 2:
+        raise CSVFormatError(f"{source} has {len(bars)} rows; need at least 2")
     return bars
 
 
