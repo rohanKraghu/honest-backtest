@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # (honest_backtest) and the command (honest-backtest) are unaffected.
 name = "honest-backtester"
 dynamic = ["version"]
-description = "An event-driven backtester built to demonstrate why backtests lie."
+description = "An event-driven backtester that measures how much each common backtest shortcut inflates a strategy's Sharpe ratio."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

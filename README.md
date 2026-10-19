@@ -473,7 +473,7 @@ src/honest_backtest/
 
 ## The data
 
-The demo runs on **synthetic** prices, generated with a fixed seed, because a
+The study runs on **synthetic** prices, generated with a fixed seed, because a
 labelled ground truth (the true size of the edge) is only available when the
 signal is injected:
 
@@ -490,8 +490,8 @@ the headline path). The state is latent: strategies
 never see it and must infer it from past returns, where it sits under noise
 roughly `1/α` times larger.
 
-**This is a demonstration harness, not a performance claim.** No conclusion about
-any real market follows from it. Synthetic data was chosen because it makes the
+**These results measure backtesting method, not a market.** No conclusion
+about any real market follows from them. Synthetic data was chosen because it makes the
 ground truth knowable: the Sharpe a backtest *reports* can be compared against
 the Sharpe that is actually *there*, stage 1's 6.94 against an oracle of 1.30.
 With real data you can never separate "my method is biased" from "the market
