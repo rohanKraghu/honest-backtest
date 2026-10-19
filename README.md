@@ -173,7 +173,7 @@ digit, which is asserted in the test suite.
 The same ladder runs on any strategy and any price file:
 
 ```bash
-pip install -e .
+pip install honest-backtester   # or pip install -e . from a clone
 honest-backtest audit --data examples/sample_prices.csv --strategy examples/sma_crossover.py
 ```
 
@@ -749,8 +749,10 @@ Sizes are rough: S is a few hours, M a day or two, L longer.
   parallel seed sweep (`--workers`).
 - `honest-backtest paper`: paper trading on a growing price file, with a
   journal and resume.
-- A PyPI-ready package (`honest-backtester`, since `honest-backtest` is taken
-  on PyPI), an MkDocs site and a release workflow. Nothing is published yet.
+- Released on PyPI as `honest-backtester` 0.1.0 (`pip install honest-backtester`;
+  the name `honest-backtest` is taken there). The docs are the `docs` folder
+  in this repository rather than a Pages site, because
+  rohankraghu.github.io/honest-backtest/ is the project's write-up page.
 - Combinatorial purged cross-validation (`audit --cpcv`): a distribution of
   out-of-sample Sharpe across purged, embargoed folds.
 - Config files (`--config`, JSON or YAML) and machine-readable results
@@ -760,9 +762,7 @@ Sizes are rough: S is a few hours, M a day or two, L longer.
 
 **Planned**
 
-| Item | What it adds | Size |
-| --- | --- | --- |
-| First PyPI release and a live docs site | `pip install honest-backtester`; version 0.1.0 is prepared but not yet published | S |
+Nothing right now.
 
 ## License
 
