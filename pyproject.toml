@@ -46,6 +46,10 @@ dependencies = ["numpy>=1.24"]
 [project.optional-dependencies]
 # YAML study and audit configs (--config file.yaml). JSON configs need nothing.
 yaml = ["pyyaml>=6"]
+# Parquet price files (load_csv_bars and --data accept .parquet).
+parquet = ["pyarrow>=14"]
+# load_yfinance_bars: daily bars downloaded from Yahoo Finance.
+yfinance = ["yfinance>=0.2.40"]
 dev = ["pytest==8.3.5", "pyyaml==6.0.3", "ruff", "build", "twine"]
 # MkDocs 2 drops plugins, which the site relies on.
 docs = ["mkdocs>=1.6,<2", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.26", "ruff"]

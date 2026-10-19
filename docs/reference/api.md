@@ -24,6 +24,8 @@ The most used names are importable from `honest_backtest` directly.
 
 ::: honest_backtest.csvdata.load_csv_bars
 
+::: honest_backtest.csvdata.load_yfinance_bars
+
 ## Audits and the ladder
 
 ::: honest_backtest.audit.AuditConfig

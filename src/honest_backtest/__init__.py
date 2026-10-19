@@ -16,7 +16,7 @@ from .commission import (
     PerShareCommission,
     ZeroCommission,
 )
-from .csvdata import CSVFormatError, load_csv_bars
+from .csvdata import CSVFormatError, load_csv_bars, load_yfinance_bars
 from .data import (
     Bar,
     DataHandler,
@@ -135,6 +135,7 @@ __all__ = [
     "detect_look_ahead",
     "generate_price_series",
     "load_csv_bars",
+    "load_yfinance_bars",
     "load_csv_panel",
     "param_grid",
     "read_journal",

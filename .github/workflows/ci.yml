@@ -21,10 +21,12 @@ jobs:
             numpy: "numpy==1.24.4"
           - python: "3.11"
             numpy: "-r requirements.txt"
+          # The newest two also install the Parquet and Yahoo extras' libraries,
+          # so test_loaders.py runs instead of skipping.
           - python: "3.12"
-            numpy: "numpy"
+            numpy: "numpy pyarrow pandas"
           - python: "3.13"
-            numpy: "numpy"
+            numpy: "numpy pyarrow pandas"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

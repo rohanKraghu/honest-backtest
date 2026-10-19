@@ -31,6 +31,9 @@ The first release.
 - `--config FILE` for the study and the audit: every flag from a JSON or YAML
   file, checked exactly like the flag, with the command line taking priority.
   YAML needs the `yaml` extra.
+- Parquet price files, in Python and as `--data` (the `parquet` extra), and
+  `load_yfinance_bars` for daily bars from Yahoo Finance (the `yfinance`
+  extra). Both use the CSV parser's checks.
 - `--json PATH`: every number in the report as strict JSON.
 
 ### Execution realism
