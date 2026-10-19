@@ -762,7 +762,7 @@ Sizes are rough: S is a few hours, M a day or two, L longer.
 
 | Item | What it adds | Size |
 | --- | --- | --- |
-| First PyPI release and a live docs site | `pip install honest-backtester`, once the name is settled | S |
+| First PyPI release and a live docs site | `pip install honest-backtester`; version 0.1.0 is prepared but not yet published | S |
 
 ## License
 
