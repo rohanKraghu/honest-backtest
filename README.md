@@ -4,7 +4,9 @@ An event-driven backtesting framework, and a study of what happens to a
 strategy's Sharpe ratio as the assumptions most backtests make without saying
 so are removed one at a time. A momentum strategy that reports a Sharpe of 6.94
 with a look-ahead bug earns about 0.22 when tested honestly: a small, real edge
-that no single eight-year backtest can tell apart from zero.
+that no single eight-year backtest can tell apart from zero. On 21 years of
+real SPY prices the same strategy falls from 4.10 to -0.16 out of sample
+(see "On real prices" below).
 
 The headline output is the rate at which a return figure
 decays when you stop lying to yourself.
@@ -138,6 +140,46 @@ version of this README concluded from them that the strategy does not work. The
 The default seed is `20260921`, the date the project was written, fixed before
 any results were seen. The multi-seed sweep exists so the claim does not rest on
 that choice.
+
+## On real prices: SPY, 2005 to 2025
+
+The same ladder, run with `audit` on 21 years of real SPY daily bars from
+Yahoo Finance (5,283 bars, split- and dividend-adjusted, real opens for
+next-bar fills), scored over the identical 18 years for every rung:
+
+| # | Stage | Momentum | Moving-average crossover |
+| --- | --- | --- | --- |
+| 1 | Naive backtest (sees one bar ahead) | **4.10** | |
+| 1 | In-sample, no costs | | 0.78 |
+| 2 | + point-in-time data | 0.05 | |
+| 3 | + slippage | 0.01 | 0.78 |
+| 4 | + commissions | 0.01 | 0.78 |
+| 5 | + next-bar execution | 0.07 | 0.79 |
+| 6 | + walk-forward OOS | **-0.16** | **0.79** |
+| | Buy and hold, same window, costs | 0.59 | 0.59 |
+
+- **Look-ahead is still most of the fake edge.** The momentum strategy that
+  can see one bar ahead reports a Sharpe of 4.10 on real prices. Without that
+  one bar it earns 0.05, and out of sample -0.16 (t-stat about -0.7), below
+  simply holding SPY at 0.59. The look-ahead check passed on both strategies,
+  so the drop is the leaky twin, not a bug in the honest one.
+- **A slow strategy survives honest testing, and that is the point of the
+  ladder.** The moving-average crossover (long or flat, turning its book over
+  about 1.6 times a year) keeps 0.79 out of sample, so costs and refitting barely
+  touch it. That beats zero (t-stat about 3.4); the audit does not test it
+  against buy-and-hold, and 0.79 against 0.59 over one 18-year history is
+  not a result anyone should trade on.
+
+With no planted edge there is no oracle here, which is why the synthetic study
+above is the controlled experiment and this is the check that it describes
+real data. To reproduce (Yahoo may revise its history slightly):
+
+```bash
+pip install "honest-backtester[yfinance]"
+python -c "import yfinance as yf; f = yf.Ticker('SPY').history(start='2005-01-01', end='2026-01-01', auto_adjust=False); f.index = f.index.date; f.index.name = 'Date'; f.to_csv('spy.csv')"
+honest-backtest audit --data spy.csv --symbol SPY --strategy momentum
+honest-backtest audit --data spy.csv --symbol SPY --strategy examples/sma_crossover.py
+```
 
 ## Reproducing it
 
