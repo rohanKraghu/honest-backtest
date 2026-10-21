@@ -801,6 +801,9 @@ Sizes are rough: S is a few hours, M a day or two, L longer.
   (`--json`).
 - Parquet input (`.parquet` files, the `parquet` extra) and an optional
   Yahoo Finance loader (`load_yfinance_bars`, the `yfinance` extra).
+- The ladder on real prices: 21 years of SPY daily bars (see "On real
+  prices"). Momentum falls from 4.10 with look-ahead to -0.16 out of sample;
+  the moving-average crossover keeps 0.79, against 0.59 for buy and hold.
 
 **Planned**
 
